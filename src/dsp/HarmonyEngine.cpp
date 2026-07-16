@@ -6,10 +6,15 @@ namespace
 {
 constexpr float kPi = 3.14159265358979f;
 
-// interval enum -> scale-degree offset (diatonic scales)
-const int kDegreeOffset[8] = { 0, -7, -4, -2, 0, 2, 4, 7 };
-// interval enum -> semitone offset (chromatic scale)
-const int kChromaticOffset[8] = { 0, -12, -7, -4, 0, 4, 7, 12 };
+// Scale-step offset -> semitones through a major pattern; used only for the
+// chromatic "scale", where degrees have no diatonic meaning.
+int chromaticSemis (int steps)
+{
+    static const int maj[7] = { 0, 2, 4, 5, 7, 9, 11 };
+    int k = steps >= 0 ? steps / 7 : -((-steps + 6) / 7);
+    const int i = steps - 7 * k;
+    return 12 * k + maj[i];
+}
 } // namespace
 
 void HarmonyEngine::prepare (double sampleRate, int maxBlockSize)
@@ -98,6 +103,11 @@ void HarmonyEngine::runAnalysis()
     if (lastEst.voiced)
         key.addObservation (lastEst.f0, lastEst.confidence);
 
+    double hopEnergy = 0.0;
+    for (int i = YinTracker::kFrame - kHop; i < YinTracker::kFrame; ++i)
+        hopEnergy += frame[i] * frame[i];
+    lastRms = (float) std::sqrt (hopEnergy / kHop);
+
     int rootPc, scaleIdx;
     if (settings.scaleMode == 0)
     {
@@ -114,55 +124,65 @@ void HarmonyEngine::runAnalysis()
     const int nearest = (int) std::lround (detMidi);
 
     int held[16], numHeld = 0;
-    if (settings.midiMode)
-        for (int note = 0; note < 128 && numHeld < 16; ++note)
-            if (heldNotes[note])
-                held[numHeld++] = note;
+    for (int note = 0; note < 128 && numHeld < 16; ++note)
+        if (heldNotes[note])
+            held[numHeld++] = note;
 
     int midiIdx = 0;
     for (int vi = 0; vi < kNumVoices; ++vi)
     {
         auto& v = voices[vi];
         const auto& vs = settings.voices[vi];
-        const bool active = vs.interval != 0;
+        using VM = HarmonySettings::Voice;
 
         float ratio = 1.0f;
         bool sounding = false;
-        if (active && lastEst.voiced)
+        if (vs.mode != VM::Off && lastEst.voiced)
         {
-            if (settings.midiMode)
+            switch (vs.mode)
             {
-                if (midiIdx < numHeld)
+                case VM::Scale:
                 {
-                    // MIDI note is an absolute target pitch (Harmony-Pro style).
-                    ratio = (float) std::exp2 ((held[midiIdx++] - detMidi) / 12.0);
+                    const int steps = vs.degree - 7;
+                    const int target = scaleIdx == KeyEngine::kChromatic
+                                           ? nearest + chromaticSemis (steps)
+                                           : KeyEngine::harmonyTarget (nearest, rootPc, scaleIdx, steps);
+                    // Offset from the *nearest* note so the singer's detune
+                    // carries into the harmony instead of being auto-tuned away.
+                    ratio = std::exp2 ((float) (target - nearest) / 12.0f);
                     sounding = true;
+                    break;
                 }
-            }
-            else
-            {
-                const int target = scaleIdx == KeyEngine::kChromatic
-                                       ? nearest + kChromaticOffset[vs.interval]
-                                       : KeyEngine::harmonyTarget (nearest, rootPc, scaleIdx,
-                                                                   kDegreeOffset[vs.interval]);
-                // Offset from the *nearest* note so the singer's detune carries
-                // into the harmony instead of being auto-tuned away.
-                ratio = std::exp2 ((float) (target - nearest) / 12.0f);
-                sounding = true;
+                case VM::Note: // absolute pitch: alto-pedal / drone voice
+                    ratio = (float) std::exp2 ((vs.note - detMidi) / 12.0);
+                    sounding = true;
+                    break;
+                case VM::Midi:
+                    if (midiIdx < numHeld)
+                    {
+                        ratio = (float) std::exp2 ((held[midiIdx++] - detMidi) / 12.0);
+                        sounding = true;
+                    }
+                    break;
+                default: break;
             }
         }
+        ratio *= std::exp2 (vs.detune / 1200.0f);
 
         v.shifter.setPeriod (lastEst.voiced ? (float) (sr / lastEst.f0) : 0.0f, lastEst.voiced);
         v.shifter.setRatio (ratio);
 
-        // Keep unvoiced passthrough audible (doubles consonants/breaths);
-        // in MIDI mode a voice with no assigned note goes silent.
-        float g = active ? vs.gain : 0.0f;
-        if (settings.midiMode && ! sounding)
+        // Unvoiced passthrough stays audible (doubles consonants/breaths);
+        // a MIDI voice with no assigned note goes silent.
+        float g = vs.mode != VM::Off ? vs.gain : 0.0f;
+        if (vs.mode == VM::Midi && ! sounding)
             g = 0.0f;
 
         const float p = (std::clamp (vs.pan, -1.0f, 1.0f) + 1.0f) * 0.25f * kPi; // constant power
         v.targetGainL = g * std::cos (p);
         v.targetGainR = g * std::sin (p);
+
+        voiceHzOut[vi] = sounding ? lastEst.f0 * ratio : 0.0f;
+        voiceGainOut[vi] = sounding ? g : 0.0f;
     }
 }

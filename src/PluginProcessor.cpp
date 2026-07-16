@@ -1,4 +1,5 @@
 #include "PluginProcessor.h"
+#include "PluginEditor.h"
 
 OpenHarmonyProcessor::OpenHarmonyProcessor()
     : AudioProcessor (BusesProperties()
@@ -9,13 +10,15 @@ OpenHarmonyProcessor::OpenHarmonyProcessor()
     pDryWet = apvts.getRawParameterValue ("dryWet");
     pKeyRoot = apvts.getRawParameterValue ("keyRoot");
     pScale = apvts.getRawParameterValue ("scale");
-    pMidiMode = apvts.getRawParameterValue ("midiMode");
-    for (int v = 0; v < 4; ++v)
+    for (int v = 0; v < kNumVoices; ++v)
     {
         const auto s = juce::String (v + 1);
-        pInterval[v] = apvts.getRawParameterValue ("v" + s + "Interval");
+        pMode[v] = apvts.getRawParameterValue ("v" + s + "Mode");
+        pDegree[v] = apvts.getRawParameterValue ("v" + s + "Degree");
+        pNote[v] = apvts.getRawParameterValue ("v" + s + "Note");
         pGain[v] = apvts.getRawParameterValue ("v" + s + "Gain");
         pPan[v] = apvts.getRawParameterValue ("v" + s + "Pan");
+        pDetune[v] = apvts.getRawParameterValue ("v" + s + "Detune");
     }
 }
 
@@ -25,7 +28,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout OpenHarmonyProcessor::create
     AudioProcessorValueTreeState::ParameterLayout layout;
 
     layout.add (std::make_unique<AudioParameterFloat> (
-        "dryWet", "Dry/Wet", NormalisableRange<float> (0.0f, 1.0f), 0.5f));
+        "dryWet", "Mix", NormalisableRange<float> (0.0f, 1.0f), 0.45f));
     layout.add (std::make_unique<AudioParameterChoice> (
         "keyRoot", "Key Root",
         StringArray { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" }, 0));
@@ -34,25 +37,45 @@ juce::AudioProcessorValueTreeState::ParameterLayout OpenHarmonyProcessor::create
         StringArray { "Auto", "Major", "Minor", "Dorian", "Phrygian", "Lydian",
                       "Mixolydian", "Locrian", "Chromatic" },
         0));
-    layout.add (std::make_unique<AudioParameterBool> ("midiMode", "MIDI Mode", false));
 
-    const StringArray intervals { "Off", "Oct Down", "5th Down", "3rd Down",
-                                  "Unison", "3rd Up", "5th Up", "Oct Up" };
-    const int defaultInterval[4] = { 5, 6, 1, 0 }; // 3rd up, 5th up, oct down (muted), off
-    const float defaultGain[4] = { 0.8f, 0.6f, 0.0f, 0.0f };
-    const float defaultPan[4] = { -0.3f, 0.3f, -0.6f, 0.6f };
+    StringArray degrees;
+    const char* names[] = { "Oct", "7th", "6th", "5th", "4th", "3rd", "2nd" };
+    for (int i = 0; i < 7; ++i)
+        degrees.add (String (names[i]) + " Down");
+    degrees.add ("Unison");
+    for (int i = 6; i >= 0; --i)
+        degrees.add (String (names[i]) + " Up");
 
-    for (int v = 0; v < 4; ++v)
+    StringArray notes;
+    const char* pcs[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+    for (int m = 36; m < 84; ++m) // C2..B5
+        notes.add (String (pcs[m % 12]) + String (m / 12 - 1));
+
+    // Default = "Pop Stack": 3rd up left, 5th up right.
+    const int defMode[6] = { 1, 1, 0, 0, 0, 0 };
+    const int defDegree[6] = { 9, 11, 7, 7, 7, 7 };
+    const float defGain[6] = { 0.8f, 0.6f, 0.6f, 0.6f, 0.6f, 0.6f };
+    const float defPan[6] = { -0.4f, 0.4f, -0.7f, 0.7f, 0.0f, 0.0f };
+
+    for (int v = 0; v < kNumVoices; ++v)
     {
-        const auto s = juce::String (v + 1);
+        const auto s = String (v + 1);
         layout.add (std::make_unique<AudioParameterChoice> (
-            "v" + s + "Interval", "Voice " + s + " Interval", intervals, defaultInterval[v]));
+            "v" + s + "Mode", "Voice " + s + " Mode",
+            StringArray { "Off", "Scale", "Note", "MIDI" }, defMode[v]));
+        layout.add (std::make_unique<AudioParameterChoice> (
+            "v" + s + "Degree", "Voice " + s + " Interval", degrees, defDegree[v]));
+        layout.add (std::make_unique<AudioParameterChoice> (
+            "v" + s + "Note", "Voice " + s + " Note", notes, 57 - 36)); // A3
         layout.add (std::make_unique<AudioParameterFloat> (
             "v" + s + "Gain", "Voice " + s + " Gain",
-            NormalisableRange<float> (0.0f, 1.0f), defaultGain[v]));
+            NormalisableRange<float> (0.0f, 1.0f), defGain[v]));
         layout.add (std::make_unique<AudioParameterFloat> (
             "v" + s + "Pan", "Voice " + s + " Pan",
-            NormalisableRange<float> (-1.0f, 1.0f), defaultPan[v]));
+            NormalisableRange<float> (-1.0f, 1.0f), defPan[v]));
+        layout.add (std::make_unique<AudioParameterFloat> (
+            "v" + s + "Detune", "Voice " + s + " Detune",
+            NormalisableRange<float> (-50.0f, 50.0f), 0.0f));
     }
     return layout;
 }
@@ -91,9 +114,9 @@ void OpenHarmonyProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     s.dryWet = *pDryWet;
     s.keyRoot = (int) *pKeyRoot;
     s.scaleMode = (int) *pScale;
-    s.midiMode = *pMidiMode > 0.5f;
-    for (int v = 0; v < 4; ++v)
-        s.voices[v] = { (int) *pInterval[v], *pGain[v], *pPan[v] };
+    for (int v = 0; v < kNumVoices; ++v)
+        s.voices[v] = { (int) *pMode[v], (int) *pDegree[v], 36 + (int) *pNote[v],
+                        *pGain[v], *pPan[v], *pDetune[v] };
     engine.setSettings (s);
 
     if ((int) scratchIn.size() < n)
@@ -106,6 +129,17 @@ void OpenHarmonyProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     float* outL = buffer.getWritePointer (0);
     float* outR = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : scratchR.data();
     engine.process (scratchIn.data(), outL, outR, n);
+
+    const auto est = engine.lastPitch();
+    uiF0.store (est.voiced ? est.f0 : 0.0f);
+    uiRoot.store (engine.detectedRootPc());
+    uiMinor.store (engine.detectedMinor());
+    uiLevel.store (engine.inputLevel());
+    for (int v = 0; v < kNumVoices; ++v)
+    {
+        uiVoiceHz[v].store (engine.voiceTargetHz (v));
+        uiVoiceGain[v].store (engine.voiceLevel (v));
+    }
 }
 
 void OpenHarmonyProcessor::getStateInformation (juce::MemoryBlock& destData)
@@ -122,8 +156,7 @@ void OpenHarmonyProcessor::setStateInformation (const void* data, int sizeInByte
 
 juce::AudioProcessorEditor* OpenHarmonyProcessor::createEditor()
 {
-    // ponytail: generic parameter editor until step 9 (custom UI).
-    return new juce::GenericAudioProcessorEditor (*this);
+    return new OpenHarmonyEditor (*this);
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

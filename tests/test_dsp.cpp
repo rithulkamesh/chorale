@@ -192,18 +192,17 @@ int main()
         std::puts ("ok: PSOLA fifth-up lands within 3%");
     }
 
-    // 5. Engine end-to-end, diatonic mode: C4 sung, voice 1 = 3rd Up -> E4.
+    // 5. Engine end-to-end, Scale mode: C4 sung, voice 1 = 3rd Up -> E4.
     {
         const auto tone = synth ({ { 60, 1.2 } });
         HarmonySettings s;
         s.dryWet = 1.0f; // wet only
         s.scaleMode = 1; // manual C major
         s.keyRoot = 0;
-        s.voices[0] = { 5, 1.0f, 0.0f }; // 3rd Up
-        s.voices[1] = s.voices[2] = s.voices[3] = { 0, 0.0f, 0.0f };
+        s.voices[0] = { 1, 9, 57, 1.0f, 0.0f, 0.0f }; // Scale, 3rd Up
         const auto out = runEngine (tone, s);
         CHECK_NEAR (trackedF0 (out.l, 16384, (int) out.l.size()), midiHz (64), 0.03);
-        std::puts ("ok: engine diatonic 3rd-up C4->E4 within 3%");
+        std::puts ("ok: engine Scale mode 3rd-up C4->E4 within 3%");
     }
 
     // 6. Engine end-to-end, MIDI mode: A3 sung, held E4 -> harmony at E4.
@@ -211,12 +210,22 @@ int main()
         const auto tone = synth ({ { 57, 1.2 } });
         HarmonySettings s;
         s.dryWet = 1.0f;
-        s.midiMode = true;
-        s.voices[0] = { 4, 1.0f, 0.0f }; // any non-Off interval; MIDI overrides
-        s.voices[1] = s.voices[2] = s.voices[3] = { 0, 0.0f, 0.0f };
+        s.voices[0] = { 3, 7, 57, 1.0f, 0.0f, 0.0f }; // MIDI mode
         const auto out = runEngine (tone, s, { 64 });
         CHECK_NEAR (trackedF0 (out.l, 16384, (int) out.l.size()), midiHz (64), 0.03);
         std::puts ("ok: engine MIDI mode locks harmony to held E4 within 3%");
+    }
+
+    // 6b. Note mode (alto pedal): melody moves C4->E4, voice holds A3 throughout.
+    {
+        const auto tone = synth ({ { 60, 0.7 }, { 64, 0.7 } });
+        HarmonySettings s;
+        s.dryWet = 1.0f;
+        s.voices[0] = { 2, 7, 57, 1.0f, 0.0f, 0.0f }; // Note mode, A3
+        const auto out = runEngine (tone, s);
+        CHECK_NEAR (trackedF0 (out.l, 16384, (int) (0.6 * kSr)), 220.0, 0.03);
+        CHECK_NEAR (trackedF0 (out.l, (int) (0.85 * kSr), (int) out.l.size()), 220.0, 0.03);
+        std::puts ("ok: engine Note mode holds A3 pedal across melody change");
     }
 
     // 7. Demo renders (listen: tests_out/*.wav).
@@ -232,19 +241,18 @@ int main()
         s.dryWet = 0.45f;
         s.scaleMode = 1;
         s.keyRoot = 0;
-        s.voices[0] = { 5, 0.8f, -0.4f };
-        s.voices[1] = { 6, 0.6f, 0.4f };
-        s.voices[2] = { 1, 0.5f, 0.0f };
-        s.voices[3] = { 0, 0.0f, 0.0f };
+        s.voices[0] = { 1, 9, 57, 0.8f, -0.4f, 0.0f };
+        s.voices[1] = { 1, 11, 57, 0.6f, 0.4f, 0.0f };
+        s.voices[2] = { 1, 0, 57, 0.5f, 0.0f, 0.0f };
         auto out = runEngine (lead, s);
         writeWav ("tests_out/demo_harmony_diatonic.wav", out.l, out.r);
 
         // MIDI-mode demo: hold a C major triad above the whole melody.
-        HarmonySettings m = s;
-        m.midiMode = true;
-        m.voices[0] = { 4, 0.7f, -0.5f };
-        m.voices[1] = { 4, 0.7f, 0.0f };
-        m.voices[2] = { 4, 0.7f, 0.5f };
+        HarmonySettings m;
+        m.dryWet = 0.45f;
+        m.voices[0] = { 3, 7, 57, 0.7f, -0.5f, 0.0f };
+        m.voices[1] = { 3, 7, 57, 0.7f, 0.0f, 0.0f };
+        m.voices[2] = { 3, 7, 57, 0.7f, 0.5f, 0.0f };
         out = runEngine (lead, m, { 64, 67, 72 });
         writeWav ("tests_out/demo_harmony_midi_chord.wav", out.l, out.r);
         std::puts ("ok: demo WAVs rendered to tests_out/");

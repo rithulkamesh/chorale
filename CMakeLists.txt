@@ -35,6 +35,7 @@ set(DSP_SOURCES
 
 target_sources(OpenHarmony PRIVATE
     src/PluginProcessor.cpp
+    src/PluginEditor.cpp
     ${DSP_SOURCES}
 )
 

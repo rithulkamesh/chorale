@@ -140,10 +140,9 @@ int main (int argc, char** argv)
             s.scaleMode = 1; // manual key implies at least major unless scale given
     }
     // Default stack: 3rd up L, 5th up R, octave down centre (muted-ish).
-    s.voices[0] = { 5, 0.8f, -0.4f };
-    s.voices[1] = { 6, 0.6f, 0.4f };
-    s.voices[2] = { 1, 0.35f, 0.0f };
-    s.voices[3] = { 0, 0.0f, 0.0f };
+    s.voices[0] = { 1, 9, 57, 0.8f, -0.4f, 0.0f };
+    s.voices[1] = { 1, 11, 57, 0.6f, 0.4f, 0.0f };
+    s.voices[2] = { 1, 0, 57, 0.35f, 0.0f, 0.0f };
     if (argc > 6 && ! std::strcmp (argv[6], "wetonly"))
         s.dryWet = 1.0f;
 

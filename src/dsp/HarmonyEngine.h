@@ -3,21 +3,27 @@
 #include "KeyEngine.h"
 #include "PsolaShifter.h"
 #include "YinTracker.h"
+#include <cstdint>
 #include <vector>
 
 struct HarmonySettings
 {
     float dryWet = 0.5f;
-    int keyRoot = 0;      // pitch class, 0 = C (manual mode)
-    int scaleMode = 0;    // 0 = Auto (K-S detection), 1..8 = KeyEngine scale idx + 1
-    bool midiMode = false;
+    int keyRoot = 0;   // pitch class, 0 = C (manual mode)
+    int scaleMode = 0; // 0 = Auto (K-S detection), 1..8 = KeyEngine scale idx + 1
 
     struct Voice
     {
-        int interval = 0; // 0 Off, 1 Oct-, 2 5th-, 3 3rd-, 4 Unison, 5 3rd+, 6 5th+, 7 Oct+
+        // Scale: diatonic interval from the sung note. Note: hold a fixed
+        // pitch (alto-pedal style). Midi: track a held MIDI note.
+        enum Mode { Off = 0, Scale = 1, Note = 2, Midi = 3 };
+        int mode = Off;
+        int degree = 7;      // 0..14 -> scale-step offset degree-7 (7 = unison)
+        int note = 57;       // MIDI note for Note mode
         float gain = 0.7f;
-        float pan = 0.0f; // -1..1
-    } voices[4];
+        float pan = 0.0f;    // -1..1
+        float detune = 0.0f; // cents
+    } voices[6];
 };
 
 // Full harmonizer chain, JUCE-free so it can run offline in tests:
@@ -26,7 +32,7 @@ struct HarmonySettings
 class HarmonyEngine
 {
 public:
-    static constexpr int kNumVoices = 4;
+    static constexpr int kNumVoices = 6;
     static constexpr int kHop = 256;
 
     void prepare (double sampleRate, int maxBlockSize);
@@ -39,6 +45,10 @@ public:
     PitchEstimate lastPitch() const { return lastEst; }
     int detectedRootPc() const { return key.rootPc(); }
     bool detectedMinor() const { return key.isMinor(); }
+    // Visualizer telemetry (updated per hop).
+    float voiceTargetHz (int v) const { return voiceHzOut[v]; }   // 0 when not sounding
+    float voiceLevel (int v) const { return voiceGainOut[v]; }
+    float inputLevel() const { return lastRms; }
 
 private:
     void runAnalysis();
@@ -49,7 +59,7 @@ private:
     struct Voice
     {
         PsolaShifter shifter;
-        float gainL = 0, gainR = 0;         // smoothed
+        float gainL = 0, gainR = 0; // smoothed
         float targetGainL = 0, targetGainR = 0;
     };
 
@@ -65,4 +75,5 @@ private:
     uint64_t anaPos = 0, dryPos = kRingSize; // dry starts one ring ahead so the delayed read is valid
     int hopRemaining = kHop;
     bool heldNotes[128] = {};
+    float voiceHzOut[kNumVoices] = {}, voiceGainOut[kNumVoices] = {}, lastRms = 0;
 };

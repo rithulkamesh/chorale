@@ -9,6 +9,8 @@
 class OpenHarmonyProcessor : public juce::AudioProcessor
 {
 public:
+    static constexpr int kNumVoices = HarmonyEngine::kNumVoices;
+
     OpenHarmonyProcessor();
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
@@ -36,14 +38,23 @@ public:
 
     juce::AudioProcessorValueTreeState apvts;
 
+    // Live telemetry for the editor (written on the audio thread).
+    std::atomic<float> uiF0 { 0.0f };   // 0 = unvoiced
+    std::atomic<int> uiRoot { 0 };
+    std::atomic<bool> uiMinor { false };
+    std::atomic<float> uiLevel { 0.0f };
+    std::atomic<float> uiVoiceHz[HarmonyEngine::kNumVoices] {};
+    std::atomic<float> uiVoiceGain[HarmonyEngine::kNumVoices] {};
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     HarmonyEngine engine;
     std::vector<float> scratchIn, scratchR;
 
-    std::atomic<float>*pDryWet, *pKeyRoot, *pScale, *pMidiMode;
-    std::atomic<float>*pInterval[4], *pGain[4], *pPan[4];
+    std::atomic<float>*pDryWet, *pKeyRoot, *pScale;
+    std::atomic<float>*pMode[kNumVoices], *pDegree[kNumVoices], *pNote[kNumVoices],
+        *pGain[kNumVoices], *pPan[kNumVoices], *pDetune[kNumVoices];
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OpenHarmonyProcessor)
 };

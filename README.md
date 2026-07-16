@@ -16,8 +16,21 @@ level/pan → mix with dry signal.
 - [x] 5. 4 parallel harmony voices, per-voice interval/gain/pan, latency-aligned dry/wet
 - [ ] 6. CREPE via ONNX Runtime (drops in behind the `PitchTracker` interface)
 - [ ] 7. World vocoder mode (independent formant shift; PSOLA preserves formants but can't move them)
-- [x] 8. MIDI-driven harmony (held notes = absolute target pitches, overrides diatonic calc)
-- [ ] 9. Custom UI (currently generic parameter editor) + latency reduction (fixed 2048 samples ≈ 46 ms, host-compensated)
+- [x] 8. MIDI-driven harmony (per-voice MIDI mode: held notes = absolute target pitches)
+- [x] 9. Custom UI: dark theme, audio-reactive particle visualizer, preset browser,
+       six voice strips (mode / interval / note / detune / pan / gain), live key+pitch readout
+- [ ] 10. Latency reduction (fixed 2048 samples ≈ 46 ms, host-compensated)
+
+## Voices & presets
+
+Six voices, each with a mode: **Scale** (diatonic interval from the sung note,
+2nd..octave up/down), **Note** (hold a fixed pitch — alto-pedal/drone style),
+or **MIDI** (track held MIDI notes). Plus per-voice gain, pan, and detune
+(+-50 cents, for doubler thickening). 33 stock presets across Duets, Stacks,
+Choirs, Octaves, Doublers, Pedals, MIDI, and Experimental categories — presets
+are starting points; every parameter stays live after applying one. Pedal
+presets resolve their held note against the current (auto-detected or manual)
+key. AU passes `auval` validation.
 
 ## Offline rendering
 
