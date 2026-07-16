@@ -37,6 +37,8 @@ public:
     void process (const float* in, float* outL, float* outR, int n);
     int latencySamples() const { return PsolaShifter::kLatency; }
     PitchEstimate lastPitch() const { return lastEst; }
+    int detectedRootPc() const { return key.rootPc(); }
+    bool detectedMinor() const { return key.isMinor(); }
 
 private:
     void runAnalysis();

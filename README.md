@@ -19,6 +19,12 @@ level/pan → mix with dry signal.
 - [x] 8. MIDI-driven harmony (held notes = absolute target pitches, overrides diatonic calc)
 - [ ] 9. Custom UI (currently generic parameter editor) + latency reduction (fixed 2048 samples ≈ 46 ms, host-compensated)
 
+## Offline rendering
+
+`build/harmonize in.wav out.wav [dryWet] [key|auto] [scale|auto] [wetonly]`
+runs the real engine over any WAV (PCM 16/24/32 or float, any channel count)
+and reports the auto-detected key. Runs ~10x realtime.
+
 ## Testing
 
 `build/dsp_tests` runs the JUCE-free DSP chain offline against synthesized

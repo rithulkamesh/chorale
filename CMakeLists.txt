@@ -48,6 +48,10 @@ target_compile_definitions(OpenHarmony PUBLIC
 add_executable(dsp_tests tests/test_dsp.cpp ${DSP_SOURCES})
 target_include_directories(dsp_tests PRIVATE src)
 
+# Offline harmonizer CLI for running real vocal WAVs through the engine.
+add_executable(harmonize tools/harmonize.cpp ${DSP_SOURCES})
+target_include_directories(harmonize PRIVATE src)
+
 target_link_libraries(OpenHarmony
     PRIVATE
         juce::juce_audio_utils
