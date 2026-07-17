@@ -49,8 +49,31 @@ public:
     void setSettings (const HarmonySettings& s) { settings = s; }
     void noteOn (int note);
     void noteOff (int note);
-    // outL/outR must be distinct from in.
-    void process (const float* in, float* outL, float* outR, int n);
+
+    // Optional per-bus output taps for multi-output hosts. main is required;
+    // lead and voice taps may be null and are then skipped. Lead tap carries
+    // the corrected/latency-aligned lead; voice taps are post
+    // gain/pan/solo/mute/humanize but pre wet-bus FX (tone/width/echo stay on
+    // the main mix only). All taps share the same kLatency delay.
+    struct MultiOut
+    {
+        float* mainL = nullptr;
+        float* mainR = nullptr;
+        float* leadL = nullptr;
+        float* leadR = nullptr;
+        float* voiceL[kNumVoices] = {};
+        float* voiceR[kNumVoices] = {};
+    };
+
+    void process (const float* in, const MultiOut& out, int n);
+    // Stereo-only convenience wrapper. outL/outR must be distinct from in.
+    void process (const float* in, float* outL, float* outR, int n)
+    {
+        MultiOut out;
+        out.mainL = outL;
+        out.mainR = outR;
+        process (in, out, n);
+    }
     int latencySamples() const { return PsolaShifter::kLatency; }
     PitchEstimate lastPitch() const { return lastEst; }
     int detectedRootPc() const { return key.rootPc(); }

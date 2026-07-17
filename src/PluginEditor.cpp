@@ -128,8 +128,10 @@ void ChoraleLookAndFeel::drawLinearSlider (Graphics& g, int x, int y, int w, int
         const float t = (db - minV) / (maxV - minV);
         const float ty = groove.getBottom() - t * groove.getHeight();
         g.drawHorizontalLine ((int) ty, groove.getX(), groove.getRight());
-        if (db == 0.0f || db == -24.0f)
-            g.drawText (String ((int) db), groove.getX() - 14.0f, ty - 5.0f, 12.0f, 10.0f,
+        const int dbi = (int) db;
+        if (dbi == 0 || dbi == -24)
+            g.drawText (String (dbi),
+                        Rectangle<float> (groove.getX() - 14.0f, ty - 5.0f, 12.0f, 10.0f),
                         Justification::centredRight);
     }
 

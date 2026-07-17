@@ -64,15 +64,15 @@ void HarmonyEngine::noteOff (int note)
         heldNotes[note] = false;
 }
 
-void HarmonyEngine::process (const float* in, float* outL, float* outR, int n)
+void HarmonyEngine::process (const float* in, const MultiOut& out, int n)
 {
     int done = 0;
     while (done < n)
     {
         const int todo = std::min (n - done, hopRemaining);
         const float* src = in + done;
-        float* L = outL + done;
-        float* R = outR + done;
+        float* L = out.mainL + done;
+        float* R = out.mainR + done;
 
         // Lead path: pitch-corrected (own shifter) or latency-aligned dry.
         // The correction shifter always runs so its buffers stay warm when
@@ -87,17 +87,34 @@ void HarmonyEngine::process (const float* in, float* outL, float* outR, int n)
             ++dryPos;
         }
 
+        if (out.leadL != nullptr && out.leadR != nullptr)
+            for (int i = 0; i < todo; ++i)
+            {
+                out.leadL[done + i] = leadTmp[(size_t) i];
+                out.leadR[done + i] = leadTmp[(size_t) i];
+            }
+
         std::fill_n (wetL.begin(), (size_t) todo, 0.0f);
         std::fill_n (wetR.begin(), (size_t) todo, 0.0f);
-        for (auto& v : voices)
+        for (int vi = 0; vi < kNumVoices; ++vi)
         {
+            auto& v = voices[vi];
+            float* tapL = out.voiceL[vi];
+            float* tapR = out.voiceR[vi];
             v.shifter.process (src, tmp.data(), todo);
             for (int i = 0; i < todo; ++i)
             {
                 v.gainL += 0.002f * (v.targetGainL - v.gainL);
                 v.gainR += 0.002f * (v.targetGainR - v.gainR);
-                wetL[(size_t) i] += v.gainL * tmp[(size_t) i];
-                wetR[(size_t) i] += v.gainR * tmp[(size_t) i];
+                const float vl = v.gainL * tmp[(size_t) i];
+                const float vr = v.gainR * tmp[(size_t) i];
+                wetL[(size_t) i] += vl;
+                wetR[(size_t) i] += vr;
+                if (tapL != nullptr)
+                {
+                    tapL[done + i] = vl;
+                    tapR[done + i] = vr;
+                }
             }
         }
 

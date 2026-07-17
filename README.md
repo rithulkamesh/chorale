@@ -91,6 +91,24 @@ Presets never touch your mix.
 **Latency:** 2048 samples (~46 ms @ 44.1 kHz), reported to the host for PDC. AU
 passes `auval`.
 
+## Multi-output
+
+Besides the main stereo mix, Chorale exposes ten optional stereo buses:
+**Lead** (the corrected, latency-aligned lead alone) and **Voice 1–8** (each
+harmony voice post level/pan/solo/mute, pre wet-bus FX — process stems in
+your DAW instead). All buses are disabled by default, so stereo sessions see
+no change, and every bus shares the same latency, so stems stay sample-aligned
+with the main out.
+
+- **Logic**: insert the "Chorale (Multi-Output)" component, then click the
+  **+** on the instrument channel strip to add aux channels per bus
+- **Reaper**: FX pin editor → route plugin output pairs to track channels
+- **Ableton Live**: extra audio tracks → *Audio From* → Chorale → pick a bus
+- **Bitwig/Cubase**: enable the plugin's output buses in the routing panel
+
+Stems follow the plugin mixer: what you hear per voice is what the stem
+carries.
+
 ## Demos
 
 [`demos/`](demos/) has synthesized renders: `lead_dry.wav`,

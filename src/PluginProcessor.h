@@ -49,6 +49,7 @@ public:
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+    static BusesProperties choraleBuses();
 
     HarmonyEngine engine;
     std::vector<float> scratchIn, scratchR;

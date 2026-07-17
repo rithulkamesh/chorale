@@ -1,10 +1,23 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
+juce::AudioProcessor::BusesProperties ChoraleProcessor::choraleBuses()
+{
+    auto buses = BusesProperties()
+                     .withInput ("Input", juce::AudioChannelSet::mono(), true)
+                     .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
+                     // Aux stems, disabled by default: stereo hosts see no change,
+                     // multi-out hosts (Logic Multi-Output, Reaper, Bitwig...)
+                     // enable them on demand.
+                     .withOutput ("Lead", juce::AudioChannelSet::stereo(), false);
+    for (int v = 1; v <= HarmonyEngine::kNumVoices; ++v)
+        buses = buses.withOutput ("Voice " + juce::String (v),
+                                  juce::AudioChannelSet::stereo(), false);
+    return buses;
+}
+
 ChoraleProcessor::ChoraleProcessor()
-    : AudioProcessor (BusesProperties()
-                          .withInput ("Input", juce::AudioChannelSet::mono(), true)
-                          .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+    : AudioProcessor (choraleBuses()),
       apvts (*this, nullptr, "PARAMS", createParameterLayout())
 {
     pDryWet = apvts.getRawParameterValue ("dryWet");
@@ -119,8 +132,17 @@ bool ChoraleProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
     if (layouts.getMainInputChannelSet() != juce::AudioChannelSet::mono())
         return false;
-    const auto out = layouts.getMainOutputChannelSet();
-    return out == juce::AudioChannelSet::mono() || out == juce::AudioChannelSet::stereo();
+    const auto main = layouts.getMainOutputChannelSet();
+    if (main != juce::AudioChannelSet::mono() && main != juce::AudioChannelSet::stereo())
+        return false;
+    // Aux stem buses: each either disabled or stereo.
+    for (int b = 1; b < layouts.outputBuses.size(); ++b)
+    {
+        const auto& set = layouts.outputBuses.getReference (b);
+        if (! set.isDisabled() && set != juce::AudioChannelSet::stereo())
+            return false;
+    }
+    return true;
 }
 
 void ChoraleProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
@@ -161,9 +183,29 @@ void ChoraleProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     }
     std::copy_n (buffer.getReadPointer (0), n, scratchIn.data());
 
-    float* outL = buffer.getWritePointer (0);
-    float* outR = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : scratchR.data();
-    engine.process (scratchIn.data(), outL, outR, n);
+    HarmonyEngine::MultiOut out;
+    auto mainBus = getBusBuffer (buffer, false, 0);
+    out.mainL = mainBus.getWritePointer (0);
+    out.mainR = mainBus.getNumChannels() > 1 ? mainBus.getWritePointer (1) : scratchR.data();
+    for (int b = 1; b < getBusCount (false); ++b)
+    {
+        if (! getBus (false, b)->isEnabled())
+            continue;
+        auto aux = getBusBuffer (buffer, false, b);
+        if (aux.getNumChannels() < 2)
+            continue;
+        if (b == 1)
+        {
+            out.leadL = aux.getWritePointer (0);
+            out.leadR = aux.getWritePointer (1);
+        }
+        else
+        {
+            out.voiceL[b - 2] = aux.getWritePointer (0);
+            out.voiceR[b - 2] = aux.getWritePointer (1);
+        }
+    }
+    engine.process (scratchIn.data(), out, n);
 
     const auto est = engine.lastPitch();
     uiF0.store (est.voiced ? est.f0 : 0.0f);

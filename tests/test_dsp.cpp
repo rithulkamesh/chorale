@@ -258,6 +258,52 @@ int main()
         std::puts ("ok: hard correction snaps +40c lead to the scale note");
     }
 
+    // 6e. Multi-output stems: voice buses carry isolated post-fader voices,
+    // the lead bus carries the lead, and the main bus is identical to the
+    // stereo-only wrapper for the same deterministic settings.
+    {
+        const auto tone = synth ({ { 60, 1.2 } });
+        HarmonySettings s;
+        s.dryWet = 0.5f;
+        s.scaleMode = 1; // manual C major, humanize/echo off -> deterministic
+        s.humanize = 0.0f;
+        s.voices[0] = { 1, 9, 57, 1.0f, 0.0f, 0.0f };  // 3rd up
+        s.voices[1] = { 1, 11, 57, 1.0f, 0.0f, 0.0f }; // 5th up
+
+        const size_t len = tone.size();
+        std::vector<float> mainL (len), mainR (len), leadL (len), leadR (len),
+            v1L (len), v1R (len), v2L (len), v2R (len);
+
+        HarmonyEngine eng;
+        eng.prepare (kSr, 512);
+        eng.setSettings (s);
+        for (size_t i = 0; i < len; i += 512)
+        {
+            const int n = (int) std::min<size_t> (512, len - i);
+            HarmonyEngine::MultiOut mo;
+            mo.mainL = mainL.data() + i;
+            mo.mainR = mainR.data() + i;
+            mo.leadL = leadL.data() + i;
+            mo.leadR = leadR.data() + i;
+            mo.voiceL[0] = v1L.data() + i;
+            mo.voiceR[0] = v1R.data() + i;
+            mo.voiceL[1] = v2L.data() + i;
+            mo.voiceR[1] = v2R.data() + i;
+            eng.process (tone.data() + i, mo, n);
+        }
+
+        CHECK_NEAR (trackedF0 (v1L, 16384, (int) len), midiHz (64), 0.03);  // E4 stem
+        CHECK_NEAR (trackedF0 (v2L, 16384, (int) len), midiHz (67), 0.03);  // G4 stem
+        CHECK_NEAR (trackedF0 (leadL, 16384, (int) len), midiHz (60), 0.03); // lead stem
+
+        const auto ref = runEngine (tone, s); // stereo wrapper, same settings
+        double maxDiff = 0.0;
+        for (size_t i = 0; i < len; ++i)
+            maxDiff = std::max (maxDiff, (double) std::abs (ref.l[i] - mainL[i]));
+        CHECK (maxDiff < 1e-6);
+        std::puts ("ok: multi-out stems isolated; main bus matches stereo mix");
+    }
+
     // 7. Demo renders (listen: tests_out/*.wav).
     {
         const std::vector<std::pair<double, double>> melody = {
