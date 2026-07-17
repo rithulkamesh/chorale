@@ -3,10 +3,6 @@
 #include "PluginProcessor.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 
-// Chorale UI: header (preset / key / correct / mix), note-chip row, radar
-// stage with draggable voice bubbles over a fine-particle field, left voice
-// detail panel with solo/mute, live keyboard strip, and a global FX bar
-// (humanize / tone / width / echo).
 namespace ui
 {
 const juce::Colour kBg { 0xff0e1014 };
@@ -21,8 +17,10 @@ const juce::Colour kVoice[8] = {
     juce::Colour (0xfff08ed8), juce::Colour (0xffb5e06a),
 };
 
-// Short display label for a voice's current target ("3RD^", "A3", "MIDI", "-").
 juce::String voiceLabel (juce::AudioProcessorValueTreeState& apvts, int voiceIndex);
+float gainToDb (float gain);
+float dbToGain (float db);
+juce::String gainDbString (float db);
 } // namespace ui
 
 class ChoraleLookAndFeel : public juce::LookAndFeel_V4
@@ -31,6 +29,9 @@ public:
     ChoraleLookAndFeel();
     void drawRotarySlider (juce::Graphics&, int x, int y, int w, int h, float pos,
                            float startAngle, float endAngle, juce::Slider&) override;
+    void drawLinearSlider (juce::Graphics&, int x, int y, int w, int h, float sliderPos,
+                           float minSliderPos, float maxSliderPos,
+                           juce::Slider::SliderStyle, juce::Slider&) override;
     void drawComboBox (juce::Graphics&, int w, int h, bool down, int bx, int by, int bw, int bh,
                        juce::ComboBox&) override;
     void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour&,
@@ -38,6 +39,32 @@ public:
     juce::Font getComboBoxFont (juce::ComboBox&) override;
     juce::Font getPopupMenuFont() override;
     juce::Font getTextButtonFont (juce::TextButton&, int) override;
+};
+
+//==============================================================================
+class GainFader : public juce::Component, private juce::Timer
+{
+public:
+    GainFader();
+    void bind (ChoraleProcessor&, const juce::String& paramId);
+    void setMeterLevel (float level);
+    float getSmoothedMeter() const { return smoothedMeter; }
+
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void mouseDown (const juce::MouseEvent&) override;
+
+private:
+    void timerCallback() override;
+    void syncFromParam();
+    void pushToParam();
+    void updateLabel();
+
+    ChoraleProcessor* processor = nullptr;
+    juce::String paramId;
+    float meterLevel = 0.0f, smoothedMeter = 0.0f;
+    juce::Slider slider;
+    juce::Label valueLbl;
 };
 
 //==============================================================================
@@ -52,14 +79,11 @@ public:
 private:
     ChoraleProcessor& processor;
     std::function<void (int)> onSelect;
-    juce::Rectangle<int> chipRect (int index) const; // 0 = lead, 1..8 = voices
+    juce::Rectangle<int> chipRect (int index) const;
     int selected = 0;
 };
 
 //==============================================================================
-// Radar stage: voice bubbles (angle = pan, radius = pitch offset) over a
-// fine glittering particle field. Drag a bubble horizontally for pan,
-// vertically for level; click to select.
 class StageView : public juce::Component, private juce::Timer
 {
 public:
@@ -68,28 +92,54 @@ public:
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override;
-    void setSelected (int v) { selected = v; }
+    void setSelected (int v) { selected = v; repaint(); }
 
 private:
     void timerCallback() override;
     juce::Point<float> bubblePos (int voice) const;
-    float offsetSemis (int voice) const;
-    void spawn (juce::Point<float> at, float intensity, juce::Colour c);
+    void stageGeometry (float& cx, float& cy, float& rMax, float& rMin) const;
+    void panGainFromPoint (juce::Point<float> pt, float& pan, float& gain) const;
+    float bubbleHitRadius (int voice) const;
 
-    struct Particle
+    ChoraleProcessor& processor;
+    std::function<void (int)> onSelect;
+    float smoothedLevel = 0.0f;
+    float voiceLevel[ChoraleProcessor::kNumVoices] {};
+    int selected = 0, dragging = -1;
+};
+
+//==============================================================================
+class MixerView : public juce::Component, private juce::Timer
+{
+public:
+    MixerView (ChoraleProcessor&, std::function<void (int)> onSelect);
+    void setSelected (int v);
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void mouseDown (const juce::MouseEvent&) override;
+
+private:
+    void timerCallback() override;
+    void refreshChannel (int v);
+
+    struct Channel
     {
-        float x, y, vx, vy, age, life, size, baseAlpha, twinkle;
-        juce::Colour colour;
+        juce::Label title;
+        juce::ComboBox mode, degree, note;
+        juce::Slider detune, pan;
+        juce::Label detuneLbl, panLbl;
+        GainFader fader;
+
+        using ComboAtt = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
+        using SliderAtt = juce::AudioProcessorValueTreeState::SliderAttachment;
+        std::unique_ptr<ComboAtt> modeAtt, degreeAtt, noteAtt;
+        std::unique_ptr<SliderAtt> detuneAtt, panAtt;
     };
 
     ChoraleProcessor& processor;
     std::function<void (int)> onSelect;
-    std::vector<Particle> particles;
-    juce::Random rng;
-    float time = 0.0f, smoothedLevel = 0.0f;
-    int selected = 0, dragging = -1;
-    float dragStartPan = 0, dragStartGain = 0;
-    juce::Point<float> dragStartPos;
+    Channel channels[ChoraleProcessor::kNumVoices];
+    int selected = 0;
 };
 
 //==============================================================================
@@ -97,8 +147,9 @@ class VoiceDetailPanel : public juce::Component
 {
 public:
     explicit VoiceDetailPanel (ChoraleProcessor&);
-    void setVoice (int v); // rebinds all attachments to voice v's parameters
-    void refresh();        // degree/note visibility follows mode
+    void setVoice (int v);
+    void refresh();
+    void tick();
     void paint (juce::Graphics&) override;
     void resized() override;
 
@@ -107,7 +158,8 @@ private:
     int voice = 0;
     juce::Label title;
     juce::ComboBox mode, degree, note;
-    juce::Slider detune, pan, level;
+    juce::Slider detune, pan;
+    GainFader level;
     juce::Label detuneLbl, panLbl, levelLbl;
     juce::TextButton solo { "S" }, mute { "M" };
 
@@ -115,19 +167,8 @@ private:
     using SliderAtt = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAtt = juce::AudioProcessorValueTreeState::ButtonAttachment;
     std::unique_ptr<ComboAtt> modeAtt, degreeAtt, noteAtt;
-    std::unique_ptr<SliderAtt> detuneAtt, panAtt, levelAtt;
+    std::unique_ptr<SliderAtt> detuneAtt, panAtt;
     std::unique_ptr<ButtonAtt> soloAtt, muteAtt;
-};
-
-//==============================================================================
-class KeyboardStrip : public juce::Component
-{
-public:
-    explicit KeyboardStrip (ChoraleProcessor& p) : processor (p) {}
-    void paint (juce::Graphics&) override;
-
-private:
-    ChoraleProcessor& processor;
 };
 
 //==============================================================================
@@ -138,12 +179,15 @@ public:
     ~ChoraleEditor() override;
 
     void paint (juce::Graphics&) override;
+    void paintOverChildren (juce::Graphics&) override;
     void resized() override;
 
 private:
     void timerCallback() override;
     void applyPreset (int presetIndex);
     void selectVoice (int v);
+    void setMainView (bool mixer);
+    void layoutHeader();
 
     ChoraleProcessor& proc;
     ChoraleLookAndFeel lnf;
@@ -152,11 +196,14 @@ private:
     juce::Slider mix, humanize, tone, width, echoTime, echoFb, echoMix;
     juce::Label titleLbl, keyLbl, scaleLbl, correctLbl, mixLbl, autoKeyLbl, pitchLbl, latencyLbl;
     juce::Label fxLbls[6];
+    juce::TextButton stageBtn { "STAGE" }, mixerBtn { "MIXER" };
 
     NoteChips chips;
     StageView stage;
+    MixerView mixer;
     VoiceDetailPanel detail;
-    KeyboardStrip keyboard;
+
+    bool showMixer = false;
 
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> keyAtt, scaleAtt, correctAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>

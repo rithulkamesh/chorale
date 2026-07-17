@@ -26,6 +26,30 @@ String voiceLabel (AudioProcessorValueTreeState& apvts, int v)
     return String (names[std::min (std::abs (deg), 7)]) + (deg > 0 ? String::charToString (0x2191)
                                                                    : String::charToString (0x2193));
 }
+
+constexpr float kMinGainDb = -60.0f;
+constexpr float kMaxGainDb = 6.0f;
+
+float gainToDb (float gain)
+{
+    if (gain <= 0.0001f)
+        return kMinGainDb;
+    return jmax (kMinGainDb, Decibels::gainToDecibels (gain));
+}
+
+float dbToGain (float db)
+{
+    if (db <= kMinGainDb)
+        return 0.0f;
+    return Decibels::decibelsToGain (db);
+}
+
+String gainDbString (float db)
+{
+    if (db <= kMinGainDb + 0.05f)
+        return "-inf";
+    return String (db, 1) + " dB";
+}
 } // namespace ui
 
 //==============================================================================
@@ -73,6 +97,52 @@ void ChoraleLookAndFeel::drawRotarySlider (Graphics& g, int x, int y, int w, int
     g.fillEllipse (Rectangle<float> (4.5f, 4.5f).withCentre (tip));
 }
 
+void ChoraleLookAndFeel::drawLinearSlider (Graphics& g, int x, int y, int w, int h,
+                                           float sliderPos, float minSliderPos, float maxSliderPos,
+                                           Slider::SliderStyle style, Slider& s)
+{
+    if (style != Slider::LinearVertical)
+    {
+        LookAndFeel_V4::drawLinearSlider (g, x, y, w, h, sliderPos, minSliderPos, maxSliderPos, style, s);
+        return;
+    }
+
+    auto track = Rectangle<float> ((float) x, (float) y, (float) w, (float) h).reduced (3.0f, 4.0f);
+    if (dynamic_cast<GainFader*> (s.getParentComponent()) != nullptr)
+        track.removeFromLeft (10.0f);
+
+    const float tw = jmin (10.0f, track.getWidth() * 0.28f);
+    const auto groove = track.withSizeKeepingCentre (tw, track.getHeight());
+
+    g.setColour (Colour (0xff151920));
+    g.fillRoundedRectangle (groove, 2.0f);
+    g.setColour (Colour (0xff2a3038));
+    g.drawRoundedRectangle (groove, 2.0f, 0.8f);
+
+    const float minV = (float) s.getMinimum();
+    const float maxV = (float) s.getMaximum();
+    g.setColour (ui::kDim.withAlpha (0.55f));
+    g.setFont (Font (FontOptions (7.5f)));
+    for (float db : { 0.0f, -12.0f, -24.0f, -48.0f })
+    {
+        const float t = (db - minV) / (maxV - minV);
+        const float ty = groove.getBottom() - t * groove.getHeight();
+        g.drawHorizontalLine ((int) ty, groove.getX(), groove.getRight());
+        if (db == 0.0f || db == -24.0f)
+            g.drawText (String ((int) db), groove.getX() - 14.0f, ty - 5.0f, 12.0f, 10.0f,
+                        Justification::centredRight);
+    }
+
+    g.setColour (Colours::white.withAlpha (0.95f));
+    g.fillRoundedRectangle (Rectangle<float> (groove.getX() - 1.0f, sliderPos - 4.0f,
+                                              groove.getWidth() + 2.0f, 8.0f),
+                            2.0f);
+    g.setColour (Colour (0xff000000).withAlpha (0.25f));
+    g.drawRoundedRectangle (Rectangle<float> (groove.getX() - 1.0f, sliderPos - 4.0f,
+                                              groove.getWidth() + 2.0f, 8.0f),
+                            2.0f, 0.8f);
+}
+
 void ChoraleLookAndFeel::drawComboBox (Graphics& g, int w, int h, bool, int, int, int, int,
                                        ComboBox& box)
 {
@@ -92,20 +162,179 @@ void ChoraleLookAndFeel::drawButtonBackground (Graphics& g, Button& b, const Col
                                                bool highlighted, bool)
 {
     const auto r = b.getLocalBounds().toFloat().reduced (0.5f);
+    const bool chipBtn = b.getButtonText() == "STAGE" || b.getButtonText() == "MIXER";
+    const float radius = chipBtn ? 12.0f : 5.0f;
+
     Colour fill = ui::kPanelHi;
     if (b.getToggleState())
         fill = b.findColour (TextButton::buttonOnColourId);
     else if (highlighted)
         fill = ui::kPanelHi.brighter (0.15f);
     g.setColour (fill);
-    g.fillRoundedRectangle (r, 5.0f);
+    g.fillRoundedRectangle (r, radius);
     g.setColour (Colour (0xff2c3242));
-    g.drawRoundedRectangle (r, 5.0f, 1.0f);
+    g.drawRoundedRectangle (r, radius, 1.0f);
+    if (chipBtn && b.getToggleState())
+    {
+        g.setColour (Colours::white);
+        g.drawRoundedRectangle (r.reduced (0.5f), radius, 1.4f);
+    }
 }
 
 Font ChoraleLookAndFeel::getComboBoxFont (ComboBox&) { return Font (FontOptions (13.0f)); }
 Font ChoraleLookAndFeel::getPopupMenuFont() { return Font (FontOptions (13.0f)); }
-Font ChoraleLookAndFeel::getTextButtonFont (TextButton&, int) { return Font (FontOptions (12.0f, Font::bold)); }
+Font ChoraleLookAndFeel::getTextButtonFont (TextButton& b, int)
+{
+    if (b.getButtonText() == "STAGE" || b.getButtonText() == "MIXER")
+        return Font (FontOptions (11.0f, Font::bold));
+    return Font (FontOptions (12.0f, Font::bold));
+}
+
+//==============================================================================
+GainFader::GainFader()
+{
+    slider.setSliderStyle (Slider::LinearVertical);
+    slider.setTextBoxStyle (Slider::NoTextBox, false, 0, 0);
+    slider.setRange (ui::kMinGainDb, ui::kMaxGainDb, 0.1);
+    slider.setValue (0.0);
+    addAndMakeVisible (slider);
+
+    valueLbl.setJustificationType (Justification::centred);
+    valueLbl.setFont (Font (FontOptions (9.0f)));
+    valueLbl.setColour (Label::textColourId, ui::kDim);
+    addAndMakeVisible (valueLbl);
+
+    slider.onValueChange = [this]
+    {
+        pushToParam();
+        updateLabel();
+    };
+    slider.onDragStart = [this]
+    {
+        if (processor != nullptr && paramId.isNotEmpty())
+            if (auto* p = processor->apvts.getParameter (paramId))
+                p->beginChangeGesture();
+    };
+    slider.onDragEnd = [this]
+    {
+        if (processor != nullptr && paramId.isNotEmpty())
+            if (auto* p = processor->apvts.getParameter (paramId))
+                p->endChangeGesture();
+    };
+
+    startTimerHz (30);
+}
+
+void GainFader::bind (ChoraleProcessor& p, const String& id)
+{
+    processor = &p;
+    paramId = id;
+    syncFromParam();
+}
+
+void GainFader::setMeterLevel (float level)
+{
+    meterLevel = level;
+    const float prev = smoothedMeter;
+    smoothedMeter += 0.35f * (level - smoothedMeter);
+    if (std::abs (smoothedMeter - prev) > 0.002f)
+        repaint();
+}
+
+void GainFader::syncFromParam()
+{
+    if (processor == nullptr || paramId.isEmpty())
+        return;
+    const float gain = processor->apvts.getRawParameterValue (paramId)->load();
+    slider.setValue (ui::gainToDb (gain), dontSendNotification);
+    updateLabel();
+}
+
+void GainFader::pushToParam()
+{
+    if (processor == nullptr || paramId.isEmpty())
+        return;
+    const float db = (float) slider.getValue();
+    const float gain = jmin (1.0f, ui::dbToGain (db));
+    if (auto* p = processor->apvts.getParameter (paramId))
+    {
+        const float norm = p->convertTo0to1 (gain);
+        if (std::abs (p->getValue() - norm) > 0.0005f)
+            p->setValueNotifyingHost (norm);
+    }
+}
+
+void GainFader::updateLabel()
+{
+    valueLbl.setText (ui::gainDbString ((float) slider.getValue()), dontSendNotification);
+}
+
+void GainFader::timerCallback()
+{
+    if (processor == nullptr || paramId.isEmpty())
+        return;
+    const float gain = processor->apvts.getRawParameterValue (paramId)->load();
+    const float db = ui::gainToDb (gain);
+    if (std::abs ((float) slider.getValue() - db) > 0.15f)
+        slider.setValue (db, dontSendNotification);
+    updateLabel();
+}
+
+void GainFader::paint (Graphics& g)
+{
+    auto area = getLocalBounds().toFloat();
+    area.removeFromBottom (14.0f);
+    auto meter = area.removeFromLeft (9.0f).reduced (0.0f, 4.0f);
+
+    g.setColour (Colour (0xff10141c));
+    g.fillRoundedRectangle (meter, 1.5f);
+
+    const float meterNorm = jlimit (0.0f, 1.0f,
+                                    (ui::gainToDb (smoothedMeter) - ui::kMinGainDb)
+                                        / (ui::kMaxGainDb - ui::kMinGainDb));
+    auto fill = meter;
+    fill.setHeight (meter.getHeight() * meterNorm);
+    fill.setY (meter.getBottom() - fill.getHeight());
+    g.setColour (Colour (0xff58a8e8).withAlpha (meterNorm > 0.02f ? 0.92f : 0.18f));
+    g.fillRoundedRectangle (fill, 1.5f);
+}
+
+void GainFader::resized()
+{
+    auto r = getLocalBounds();
+    valueLbl.setBounds (r.removeFromBottom (14));
+    slider.setBounds (r);
+}
+
+void GainFader::mouseDown (const MouseEvent& e)
+{
+    if (! e.mods.isPopupMenu())
+        return;
+    if (processor == nullptr || paramId.isEmpty())
+        return;
+
+    auto* dialog = new AlertWindow ("Gain", "Enter level in dB (-inf to +6)", AlertWindow::QuestionIcon);
+    dialog->addTextEditor ("db", ui::gainDbString ((float) slider.getValue()), "dB");
+    dialog->addButton ("OK", 1, KeyPress (KeyPress::returnKey));
+    dialog->addButton ("Cancel", 0, KeyPress (KeyPress::escapeKey));
+
+    const auto id = paramId;
+    dialog->enterModalState (true, ModalCallbackFunction::create (
+                                        [this, dialog, id] (int result)
+                                        {
+                                            if (result == 1)
+                                            {
+                                                auto text = dialog->getTextEditorContents ("db").trim();
+                                                float db = ui::kMinGainDb;
+                                                if (! (text.equalsIgnoreCase ("-inf")
+                                                       || text.equalsIgnoreCase ("mute")))
+                                                    db = jlimit (ui::kMinGainDb, ui::kMaxGainDb,
+                                                                 (float) text.getDoubleValue());
+                                                slider.setValue (db, sendNotificationSync);
+                                            }
+                                            delete dialog;
+                                        }));
+}
 
 //==============================================================================
 NoteChips::NoteChips (ChoraleProcessor& p, std::function<void (int)> cb)
@@ -165,102 +394,56 @@ void NoteChips::mouseDown (const MouseEvent& e)
 StageView::StageView (ChoraleProcessor& p, std::function<void (int)> cb)
     : processor (p), onSelect (std::move (cb))
 {
-    particles.reserve (600);
     startTimerHz (30);
 }
 
-float StageView::offsetSemis (int v) const
+void StageView::stageGeometry (float& cx, float& cy, float& rMax, float& rMin) const
+{
+    cx = (float) getWidth() / 2.0f;
+    cy = (float) getHeight() - 34.0f;
+    rMax = jmin ((float) getHeight() - 78.0f, (float) getWidth() / 2.0f - 46.0f);
+    rMin = 0.12f * rMax;
+}
+
+void StageView::panGainFromPoint (Point<float> pt, float& pan, float& gain) const
+{
+    float cx, cy, rMax, rMin;
+    stageGeometry (cx, cy, rMax, rMin);
+
+    const float dx = pt.x - cx;
+    const float dy = cy - pt.y;
+    const float r = std::hypot (dx, dy);
+    const float a = std::atan2 (dx, dy);
+
+    gain = jlimit (0.0f, 1.0f, (r - rMin) / (0.88f * rMax));
+    pan = jlimit (-1.0f, 1.0f, a / 1.15f);
+}
+
+float StageView::bubbleHitRadius (int v) const
 {
     const auto id = String (v + 1);
-    const int mode = (int) processor.apvts.getRawParameterValue ("v" + id + "Mode")->load();
-    if (mode == 1)
-    {
-        static const int maj[7] = { 0, 2, 4, 5, 7, 9, 11 };
-        const int steps = (int) processor.apvts.getRawParameterValue ("v" + id + "Degree")->load() - 7;
-        int k = steps >= 0 ? steps / 7 : -((-steps + 6) / 7);
-        return (float) (12 * k + maj[steps - 7 * k]);
-    }
-    if (mode == 2)
-        return jlimit (-14.0f, 14.0f,
-                       (float) (36 + (int) processor.apvts.getRawParameterValue ("v" + id + "Note")->load() - 57));
-    if (mode == 3)
-        return 9.0f;
-    return 0.0f;
+    if ((int) processor.apvts.getRawParameterValue ("v" + id + "Mode")->load() == 0)
+        return 0.0f;
+    return 28.0f;
 }
 
 Point<float> StageView::bubblePos (int v) const
 {
     const auto id = String (v + 1);
     const float pan = processor.apvts.getRawParameterValue ("v" + id + "Pan")->load();
-    const float semis = offsetSemis (v);
-    const float cx = (float) getWidth() / 2.0f, cy = (float) getHeight() - 34.0f;
-    const float rMax = jmin ((float) getHeight() - 78.0f, (float) getWidth() / 2.0f - 46.0f);
-    const float r = (0.22f + 0.72f * (semis + 14.0f) / 28.0f) * rMax;
-    const float a = pan * 1.15f; // radians from vertical
+    const float gain = processor.apvts.getRawParameterValue ("v" + id + "Gain")->load();
+    float cx, cy, rMax, rMin;
+    stageGeometry (cx, cy, rMax, rMin);
+    const float r = rMin + gain * 0.88f * rMax;
+    const float a = pan * 1.15f;
     return { cx + r * std::sin (a), cy - r * std::cos (a) };
-}
-
-void StageView::spawn (Point<float> at, float intensity, Colour c)
-{
-    if (particles.size() >= 560)
-        return;
-    Particle pt;
-    pt.x = at.x + (rng.nextFloat() - 0.5f) * 26.0f;
-    pt.y = at.y + (rng.nextFloat() - 0.5f) * 26.0f;
-    pt.vx = (rng.nextFloat() - 0.5f) * 9.0f;
-    pt.vy = -(3.0f + rng.nextFloat() * 11.0f);
-    pt.age = 0.0f;
-    pt.life = 1.4f + rng.nextFloat() * 2.0f;
-    pt.size = 0.7f + rng.nextFloat() * 1.1f;
-    pt.baseAlpha = jlimit (0.12f, 0.95f, 0.22f + intensity);
-    pt.twinkle = rng.nextFloat() * 6.28f;
-    pt.colour = c;
-    particles.push_back (pt);
 }
 
 void StageView::timerCallback()
 {
-    constexpr float dt = 1.0f / 30.0f;
-    time += dt;
-
-    smoothedLevel += 0.25f * (processor.uiLevel.load() - smoothedLevel);
-    const float drive = jlimit (0.0f, 1.0f, smoothedLevel * 8.0f);
-
-    if (processor.uiF0.load() > 0.0f && drive > 0.02f)
-        for (int k = 0; k < 1 + (int) (drive * 2.0f); ++k)
-            spawn ({ (float) getWidth() / 2.0f, (float) getHeight() - 34.0f }, drive * 0.6f, Colour (0xffe6ddd4));
-
+    smoothedLevel += 0.18f * (processor.uiLevel.load() - smoothedLevel);
     for (int v = 0; v < ChoraleProcessor::kNumVoices; ++v)
-    {
-        const float g = processor.uiVoiceGain[v].load();
-        if (g > 0.01f && drive > 0.02f)
-            for (int k = 0; k < 1 + (int) (drive * g * 3.0f); ++k)
-                spawn (bubblePos (v), drive * g * 0.9f, ui::kVoice[v]);
-    }
-
-    if (particles.size() < 70 && rng.nextFloat() < 0.5f)
-    {
-        const float rMax = jmin ((float) getHeight() - 78.0f, (float) getWidth() / 2.0f - 46.0f);
-        const float a = (rng.nextFloat() - 0.5f) * 2.3f;
-        const float r = rng.nextFloat() * rMax;
-        spawn ({ (float) getWidth() / 2.0f + r * std::sin (a), (float) getHeight() - 34.0f - r * std::cos (a) },
-               0.05f, Colour (0xff3d4460));
-        particles.back().vy *= 0.35f;
-    }
-
-    for (auto& pt : particles)
-    {
-        pt.age += dt;
-        pt.vx += std::sin (time * 0.9f + pt.y * 0.02f) * 6.0f * dt;
-        pt.vy += std::cos (time * 0.7f + pt.x * 0.015f) * 4.0f * dt;
-        pt.x += pt.vx * dt;
-        pt.y += pt.vy * dt;
-    }
-    particles.erase (std::remove_if (particles.begin(), particles.end(),
-                                     [this] (const Particle& pt)
-                                     { return pt.age >= pt.life || pt.y < -8.0f
-                                              || pt.x < -8.0f || pt.x > (float) getWidth() + 8.0f; }),
-                     particles.end());
+        voiceLevel[v] += 0.22f * (processor.uiVoiceGain[v].load() - voiceLevel[v]);
     repaint();
 }
 
@@ -270,54 +453,43 @@ void StageView::paint (Graphics& g)
     g.setColour (Colour (0xff0a0c10));
     g.fillRoundedRectangle (r, 10.0f);
 
-    const float cx = (float) getWidth() / 2.0f, cy = (float) getHeight() - 34.0f;
-    const float rMax = jmin ((float) getHeight() - 78.0f, (float) getWidth() / 2.0f - 46.0f);
+    float cx, cy, rMax, rMin;
+    stageGeometry (cx, cy, rMax, rMin);
 
-    // Concentric guide arcs (+12, 0, -12 semitone rings) and centre spoke.
-    g.setColour (Colour (0xff232838).withAlpha (0.7f));
-    for (float s : { -12.0f, 0.0f, 12.0f })
     {
-        const float rr = (0.22f + 0.72f * (s + 14.0f) / 28.0f) * rMax;
-        Path arc;
-        arc.addCentredArc (cx, cy, rr, rr, 0, -1.25f, 1.25f, true);
-        g.strokePath (arc, PathStrokeType (1.0f));
-    }
-    g.drawLine (cx, cy - rMax, cx, cy, 0.6f);
-    g.setColour (ui::kDim.withAlpha (0.55f));
-    g.setFont (Font (FontOptions (9.0f)));
-    for (float s : { -12.0f, 0.0f, 12.0f })
-    {
-        const float rr = (0.22f + 0.72f * (s + 14.0f) / 28.0f) * rMax;
-        g.drawText (String ((int) s), Rectangle<float> (26.0f, 12.0f)
-                                          .withCentre ({ cx - rr * std::sin (1.32f), cy - rr * std::cos (1.32f) }),
-                    Justification::centredRight);
-    }
-
-    // Faint breathing glow.
-    if (smoothedLevel > 0.002f)
-    {
-        const float glow = jlimit (0.0f, 0.12f, smoothedLevel * 1.2f);
-        ColourGradient grad (Colour (0xff2a3350).withAlpha (glow), cx, cy,
-                             Colours::transparentBlack, cx, cy - rMax, true);
-        g.setGradientFill (grad);
+        const float glow = jlimit (0.0f, 1.0f, smoothedLevel * 10.0f);
+        ColourGradient wash (ui::kLead.withAlpha (0.10f + glow * 0.14f), cx, cy,
+                             Colours::transparentBlack, cx, cy - rMax * 1.05f, true);
+        g.setGradientFill (wash);
         g.fillRoundedRectangle (r, 10.0f);
     }
 
-    // Glitter.
-    for (const auto& pt : particles)
+    for (int v = 0; v < ChoraleProcessor::kNumVoices; ++v)
     {
-        const float t = pt.age / pt.life;
-        float a = pt.baseAlpha * std::sin (3.14159f * jlimit (0.0f, 1.0f, t));
-        a *= 0.62f + 0.38f * std::sin (time * 9.0f + pt.twinkle); // twinkle
-        if (a <= 0.01f)
+        const auto id = String (v + 1);
+        if ((int) processor.apvts.getRawParameterValue ("v" + id + "Mode")->load() == 0)
             continue;
-        g.setColour (pt.colour.withAlpha (a * 0.18f));
-        g.fillEllipse (Rectangle<float> (pt.size * 4.2f, pt.size * 4.2f).withCentre ({ pt.x, pt.y }));
-        g.setColour (pt.colour.withAlpha (a));
-        g.fillEllipse (Rectangle<float> (pt.size * 1.4f, pt.size * 1.4f).withCentre ({ pt.x, pt.y }));
+        const float lvl = voiceLevel[v];
+        if (lvl < 0.01f)
+            continue;
+        const auto pos = bubblePos (v);
+        const float rad = 40.0f + lvl * 70.0f;
+        ColourGradient bloom (ui::kVoice[v].withAlpha (0.04f + lvl * 0.10f), pos.x, pos.y,
+                              Colours::transparentBlack, pos.x, pos.y - rad, true);
+        g.setGradientFill (bloom);
+        g.fillEllipse (pos.x - rad, pos.y - rad, rad * 2.0f, rad * 2.0f);
     }
 
-    // Voice bubbles.
+    g.setColour (Colour (0xff232838).withAlpha (0.55f));
+    for (float gv : { 0.33f, 0.66f, 1.0f })
+    {
+        const float rr = rMin + gv * 0.88f * rMax;
+        Path arc;
+        arc.addCentredArc (cx, cy, rr, rr, 0, -1.25f, 1.25f, true);
+        g.strokePath (arc, PathStrokeType (0.8f));
+    }
+    g.drawLine (cx, cy - rMax, cx, cy, 0.5f);
+
     for (int v = 0; v < ChoraleProcessor::kNumVoices; ++v)
     {
         const auto id = String (v + 1);
@@ -326,37 +498,27 @@ void StageView::paint (Graphics& g)
             continue;
         const float gain = processor.apvts.getRawParameterValue ("v" + id + "Gain")->load();
         const bool muted = processor.apvts.getRawParameterValue ("v" + id + "Mute")->load() > 0.5f;
-        const bool soloed = processor.apvts.getRawParameterValue ("v" + id + "Solo")->load() > 0.5f;
         const auto pos = bubblePos (v);
-        const float d = 24.0f + gain * 16.0f;
+        const float lvl = voiceLevel[v];
+        const float d = 22.0f + lvl * 10.0f + gain * 4.0f;
         const auto c = ui::kVoice[v];
 
-        g.setColour (c.withAlpha (muted ? 0.06f : 0.22f));
-        g.fillEllipse (Rectangle<float> (d * 1.6f, d * 1.6f).withCentre (pos));
-        g.setColour (muted ? c.withAlpha (0.25f) : c);
+        g.setColour (muted ? c.withAlpha (0.2f) : c.withAlpha (0.75f));
         g.fillEllipse (Rectangle<float> (d, d).withCentre (pos));
-        if (soloed)
-        {
-            g.setColour (Colours::white.withAlpha (0.85f));
-            g.drawEllipse (Rectangle<float> (d + 8.0f, d + 8.0f).withCentre (pos), 1.4f);
-        }
         if (v == selected)
         {
-            g.setColour (Colours::white);
-            g.drawEllipse (Rectangle<float> (d + 3.0f, d + 3.0f).withCentre (pos), 1.8f);
+            g.setColour (Colours::white.withAlpha (0.85f));
+            g.drawEllipse (Rectangle<float> (d + 4.0f, d + 4.0f).withCentre (pos), 1.2f);
         }
         g.setColour (Colour (0xff14161c));
-        g.setFont (Font (FontOptions (10.0f, Font::bold)));
+        g.setFont (Font (FontOptions (9.5f, Font::bold)));
         g.drawText (ui::voiceLabel (processor.apvts, v),
-                    Rectangle<float> (d + 20.0f, 12.0f).withCentre (pos), Justification::centred);
+                    Rectangle<float> (d + 16.0f, 11.0f).withCentre (pos), Justification::centred);
     }
 
-    // Lead bubble.
     {
-        const float pulse = 30.0f + jlimit (0.0f, 1.0f, smoothedLevel * 8.0f) * 8.0f;
-        g.setColour (ui::kLead.withAlpha (0.25f));
-        g.fillEllipse (Rectangle<float> (pulse * 1.7f, pulse * 1.7f).withCentre ({ cx, cy }));
-        g.setColour (ui::kLead);
+        const float pulse = 26.0f + jlimit (0.0f, 1.0f, smoothedLevel * 10.0f) * 6.0f;
+        g.setColour (ui::kLead.withAlpha (0.85f));
         g.fillEllipse (Rectangle<float> (pulse, pulse).withCentre ({ cx, cy }));
         String label = "LEAD";
         if (const float f0 = processor.uiF0.load(); f0 > 0.0f)
@@ -366,8 +528,8 @@ void StageView::paint (Graphics& g)
             label = String (pcs[((m % 12) + 12) % 12]) + String (m / 12 - 1);
         }
         g.setColour (Colour (0xff14161c));
-        g.setFont (Font (FontOptions (11.0f, Font::bold)));
-        g.drawText (label, Rectangle<float> (52.0f, 14.0f).withCentre ({ cx, cy }), Justification::centred);
+        g.setFont (Font (FontOptions (10.5f, Font::bold)));
+        g.drawText (label, Rectangle<float> (48.0f, 13.0f).withCentre ({ cx, cy }), Justification::centred);
     }
 
     g.setColour (Colour (0xff222735));
@@ -382,18 +544,16 @@ void StageView::mouseDown (const MouseEvent& e)
         const auto id = String (v + 1);
         if ((int) processor.apvts.getRawParameterValue ("v" + id + "Mode")->load() == 0)
             continue;
-        if (bubblePos (v).getDistanceFrom (e.position) < 24.0f)
+        if (bubblePos (v).getDistanceFrom (e.position) < bubbleHitRadius (v))
         {
             dragging = v;
             selected = v;
-            dragStartPan = processor.apvts.getRawParameterValue ("v" + id + "Pan")->load();
-            dragStartGain = processor.apvts.getRawParameterValue ("v" + id + "Gain")->load();
-            dragStartPos = e.position;
             if (auto* p = processor.apvts.getParameter ("v" + id + "Pan"))
                 p->beginChangeGesture();
             if (auto* p = processor.apvts.getParameter ("v" + id + "Gain"))
                 p->beginChangeGesture();
             onSelect (v);
+            mouseDrag (e);
             return;
         }
     }
@@ -404,12 +564,13 @@ void StageView::mouseDrag (const MouseEvent& e)
     if (dragging < 0)
         return;
     const auto id = String (dragging + 1);
-    const float pan = jlimit (-1.0f, 1.0f, dragStartPan + (e.position.x - dragStartPos.x) / 130.0f);
-    const float gain = jlimit (0.0f, 1.0f, dragStartGain - (e.position.y - dragStartPos.y) / 150.0f);
+    float pan, gain;
+    panGainFromPoint (e.position, pan, gain);
     if (auto* p = processor.apvts.getParameter ("v" + id + "Pan"))
         p->setValueNotifyingHost (p->convertTo0to1 (pan));
     if (auto* p = processor.apvts.getParameter ("v" + id + "Gain"))
         p->setValueNotifyingHost (p->convertTo0to1 (gain));
+    repaint();
 }
 
 void StageView::mouseUp (const MouseEvent&)
@@ -425,6 +586,160 @@ void StageView::mouseUp (const MouseEvent&)
 }
 
 //==============================================================================
+MixerView::MixerView (ChoraleProcessor& p, std::function<void (int)> cb)
+    : processor (p), onSelect (std::move (cb))
+{
+    auto fillCombo = [&] (ComboBox& c, const String& paramId)
+    {
+        if (auto* par = dynamic_cast<AudioParameterChoice*> (p.apvts.getParameter (paramId)))
+            c.addItemList (par->choices, 1);
+    };
+
+    for (int v = 0; v < ChoraleProcessor::kNumVoices; ++v)
+    {
+        auto& ch = channels[v];
+        const auto id = String (v + 1);
+        const auto accent = ui::kVoice[v];
+
+        ch.title.setText ("VOICE " + id, dontSendNotification);
+        ch.title.setJustificationType (Justification::centred);
+        ch.title.setFont (Font (FontOptions (10.0f, Font::bold)));
+        ch.title.setColour (Label::textColourId, accent);
+        addAndMakeVisible (ch.title);
+
+        addAndMakeVisible (ch.mode);
+        addAndMakeVisible (ch.degree);
+        addAndMakeVisible (ch.note);
+        fillCombo (ch.mode, "v" + id + "Mode");
+        fillCombo (ch.degree, "v" + id + "Degree");
+        fillCombo (ch.note, "v" + id + "Note");
+
+        for (auto* s : { &ch.detune, &ch.pan })
+        {
+            s->setSliderStyle (Slider::RotaryHorizontalVerticalDrag);
+            s->setTextBoxStyle (Slider::NoTextBox, false, 0, 0);
+            s->setColour (Slider::rotarySliderFillColourId, accent);
+            addAndMakeVisible (*s);
+        }
+        for (auto& [l, text] : std::initializer_list<std::pair<Label*, const char*>> {
+                 { &ch.detuneLbl, "DETUNE" }, { &ch.panLbl, "PAN" } })
+        {
+            l->setText (text, dontSendNotification);
+            l->setFont (Font (FontOptions (8.5f)));
+            l->setColour (Label::textColourId, ui::kDim);
+            l->setJustificationType (Justification::centred);
+            addAndMakeVisible (*l);
+        }
+
+        ch.fader.bind (p, "v" + id + "Gain");
+        addAndMakeVisible (ch.fader);
+
+        ch.modeAtt = std::make_unique<Channel::ComboAtt> (p.apvts, "v" + id + "Mode", ch.mode);
+        ch.degreeAtt = std::make_unique<Channel::ComboAtt> (p.apvts, "v" + id + "Degree", ch.degree);
+        ch.noteAtt = std::make_unique<Channel::ComboAtt> (p.apvts, "v" + id + "Note", ch.note);
+        ch.detuneAtt = std::make_unique<Channel::SliderAtt> (p.apvts, "v" + id + "Detune", ch.detune);
+        ch.panAtt = std::make_unique<Channel::SliderAtt> (p.apvts, "v" + id + "Pan", ch.pan);
+
+        ch.mode.onChange = [this, v] { refreshChannel (v); };
+        refreshChannel (v);
+    }
+    startTimerHz (30);
+}
+
+void MixerView::refreshChannel (int v)
+{
+    auto& ch = channels[v];
+    const int m = (int) processor.apvts.getRawParameterValue ("v" + String (v + 1) + "Mode")->load();
+    ch.degree.setVisible (m == 1 || m == 0 || m == 3);
+    ch.note.setVisible (m == 2);
+    const float alpha = m == 0 ? 0.45f : 1.0f;
+    ch.detune.setAlpha (alpha);
+    ch.pan.setAlpha (alpha);
+    ch.detuneLbl.setAlpha (alpha);
+    ch.panLbl.setAlpha (alpha);
+    ch.fader.setAlpha (alpha);
+}
+
+void MixerView::setSelected (int v)
+{
+    selected = jlimit (0, ChoraleProcessor::kNumVoices - 1, v);
+    repaint();
+}
+
+void MixerView::paint (Graphics& g)
+{
+    g.setColour (Colour (0xff0a0c10));
+    g.fillRoundedRectangle (getLocalBounds().toFloat(), 10.0f);
+
+    const int colW = getWidth() / ChoraleProcessor::kNumVoices;
+    for (int v = 0; v < ChoraleProcessor::kNumVoices; ++v)
+    {
+        auto col = getLocalBounds().withWidth (colW).translated (v * colW, 0).toFloat().reduced (2.0f, 8.0f);
+        g.setColour (ui::kVoice[v].withAlpha (v == selected ? 0.55f : 0.85f));
+        g.fillRoundedRectangle (col.getX() + 8.0f, col.getY(), col.getWidth() - 16.0f, 2.5f, 1.0f);
+    }
+
+    g.setColour (Colour (0xff1e222c));
+    for (int v = 1; v < ChoraleProcessor::kNumVoices; ++v)
+        g.drawVerticalLine (v * colW, 10.0f, (float) getHeight() - 10.0f);
+
+    g.setColour (Colour (0xff222735));
+    g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), 10.0f, 1.0f);
+}
+
+void MixerView::resized()
+{
+    const int colW = getWidth() / ChoraleProcessor::kNumVoices;
+    for (int v = 0; v < ChoraleProcessor::kNumVoices; ++v)
+    {
+        auto col = getLocalBounds().withWidth (colW).translated (v * colW, 0).reduced (5, 10);
+        col.removeFromTop (4);
+        channels[v].title.setBounds (col.removeFromTop (14));
+        col.removeFromTop (4);
+        channels[v].mode.setBounds (col.removeFromTop (22));
+        col.removeFromTop (3);
+        auto pitchRow = col.removeFromTop (22);
+        channels[v].degree.setBounds (pitchRow);
+        channels[v].note.setBounds (pitchRow);
+        col.removeFromTop (6);
+
+        auto knobs = col.removeFromTop (58);
+        const int kw = knobs.getWidth() / 2;
+        auto k1 = knobs.removeFromLeft (kw), k2 = knobs.removeFromLeft (kw);
+        channels[v].detune.setBounds (k1.removeFromTop (44));
+        channels[v].detuneLbl.setBounds (k1);
+        channels[v].pan.setBounds (k2.removeFromTop (44));
+        channels[v].panLbl.setBounds (k2);
+
+        col.removeFromTop (4);
+        channels[v].fader.setBounds (col);
+    }
+}
+
+void MixerView::mouseDown (const MouseEvent& e)
+{
+    if (e.originalComponent != this)
+        return;
+    const int colW = getWidth() / ChoraleProcessor::kNumVoices;
+    const int v = e.x / colW;
+    if (v >= 0 && v < ChoraleProcessor::kNumVoices)
+    {
+        selected = v;
+        onSelect (v);
+        repaint();
+    }
+}
+
+void MixerView::timerCallback()
+{
+    for (int v = 0; v < ChoraleProcessor::kNumVoices; ++v)
+    {
+        refreshChannel (v);
+        channels[v].fader.setMeterLevel (processor.uiVoiceGain[v].load());
+    }
+}
+
+//==============================================================================
 VoiceDetailPanel::VoiceDetailPanel (ChoraleProcessor& p) : processor (p)
 {
     title.setFont (Font (FontOptions (13.0f, Font::bold)));
@@ -433,14 +748,15 @@ VoiceDetailPanel::VoiceDetailPanel (ChoraleProcessor& p) : processor (p)
     addAndMakeVisible (degree);
     addAndMakeVisible (note);
 
-    for (auto* s : { &detune, &pan, &level })
+    for (auto* s : { &detune, &pan })
     {
         s->setSliderStyle (Slider::RotaryHorizontalVerticalDrag);
         s->setTextBoxStyle (Slider::NoTextBox, false, 0, 0);
         addAndMakeVisible (*s);
     }
+    addAndMakeVisible (level);
     for (auto& [l, text] : std::initializer_list<std::pair<Label*, const char*>> {
-             { &detuneLbl, "DETUNE" }, { &panLbl, "PAN" }, { &levelLbl, "LEVEL" } })
+             { &detuneLbl, "DETUNE" }, { &panLbl, "PAN" }, { &levelLbl, "GAIN" } })
     {
         l->setText (text, dontSendNotification);
         l->setFont (Font (FontOptions (9.0f)));
@@ -465,14 +781,14 @@ void VoiceDetailPanel::setVoice (int v)
 
     title.setText ("VOICE " + id, dontSendNotification);
     title.setColour (Label::textColourId, accent);
-    for (auto* s : { &detune, &pan, &level })
+    for (auto* s : { &detune, &pan })
         s->setColour (Slider::rotarySliderFillColourId, accent);
     solo.setColour (TextButton::buttonOnColourId, Colours::white);
     mute.setColour (TextButton::buttonOnColourId, accent);
 
     // Rebind everything to this voice's parameters.
     modeAtt.reset(); degreeAtt.reset(); noteAtt.reset();
-    detuneAtt.reset(); panAtt.reset(); levelAtt.reset();
+    detuneAtt.reset(); panAtt.reset();
     soloAtt.reset(); muteAtt.reset();
 
     auto fillCombo = [&] (ComboBox& c, const String& paramId)
@@ -490,12 +806,17 @@ void VoiceDetailPanel::setVoice (int v)
     noteAtt = std::make_unique<ComboAtt> (processor.apvts, "v" + id + "Note", note);
     detuneAtt = std::make_unique<SliderAtt> (processor.apvts, "v" + id + "Detune", detune);
     panAtt = std::make_unique<SliderAtt> (processor.apvts, "v" + id + "Pan", pan);
-    levelAtt = std::make_unique<SliderAtt> (processor.apvts, "v" + id + "Gain", level);
+    level.bind (processor, "v" + id + "Gain");
     soloAtt = std::make_unique<ButtonAtt> (processor.apvts, "v" + id + "Solo", solo);
     muteAtt = std::make_unique<ButtonAtt> (processor.apvts, "v" + id + "Mute", mute);
 
     refresh();
     repaint();
+}
+
+void VoiceDetailPanel::tick()
+{
+    level.setMeterLevel (processor.uiVoiceGain[voice].load());
 }
 
 void VoiceDetailPanel::refresh()
@@ -521,89 +842,32 @@ void VoiceDetailPanel::paint (Graphics& g)
 
 void VoiceDetailPanel::resized()
 {
-    auto r = getLocalBounds().reduced (14, 10);
-    r.removeFromTop (4);
+    auto r = getLocalBounds().reduced (12, 10);
+    r.removeFromTop (2);
     auto titleRow = r.removeFromTop (22);
-    solo.setBounds (titleRow.removeFromRight (26));
-    titleRow.removeFromRight (6);
-    mute.setBounds (titleRow.removeFromRight (26));
+    solo.setBounds (titleRow.removeFromRight (24));
+    titleRow.removeFromRight (4);
+    mute.setBounds (titleRow.removeFromRight (24));
     title.setBounds (titleRow);
-    r.removeFromTop (8);
-    mode.setBounds (r.removeFromTop (26));
-    r.removeFromTop (8);
-    auto sel = r.removeFromTop (26);
+    r.removeFromTop (6);
+    mode.setBounds (r.removeFromTop (24));
+    r.removeFromTop (6);
+    auto sel = r.removeFromTop (24);
     degree.setBounds (sel);
     note.setBounds (sel);
-    r.removeFromTop (14);
+    r.removeFromTop (8);
 
-    auto knobs = r.removeFromTop (74);
-    const int kw = knobs.getWidth() / 3;
+    auto knobs = r.removeFromTop (68);
+    const int kw = knobs.getWidth() / 2;
     auto k1 = knobs.removeFromLeft (kw), k2 = knobs.removeFromLeft (kw);
-    detune.setBounds (k1.removeFromTop (58));
+    detune.setBounds (k1.removeFromTop (52));
     detuneLbl.setBounds (k1);
-    pan.setBounds (k2.removeFromTop (58));
+    pan.setBounds (k2.removeFromTop (52));
     panLbl.setBounds (k2);
-    level.setBounds (knobs.removeFromTop (58));
-    levelLbl.setBounds (knobs);
-}
 
-//==============================================================================
-void KeyboardStrip::paint (Graphics& g)
-{
-    const auto r = getLocalBounds().toFloat();
-    g.setColour (Colour (0xff0a0c10));
-    g.fillRoundedRectangle (r, 8.0f);
-
-    constexpr int loNote = 36, hiNote = 84; // C2..B5
-    constexpr int numWhite = 28;
-    const float ww = (r.getWidth() - 12.0f) / numWhite;
-    const float x0 = r.getX() + 6.0f, y0 = r.getY() + 5.0f, kh = r.getHeight() - 10.0f;
-
-    const int leadNote = processor.uiF0.load() > 0.0f
-                             ? (int) std::lround (69.0 + 12.0 * std::log2 (processor.uiF0.load() / 440.0))
-                             : -1;
-    int voiceNote[ChoraleProcessor::kNumVoices];
-    for (int v = 0; v < ChoraleProcessor::kNumVoices; ++v)
-    {
-        const float hz = processor.uiVoiceHz[v].load();
-        voiceNote[v] = hz > 0.0f ? (int) std::lround (69.0 + 12.0 * std::log2 (hz / 440.0)) : -1;
-    }
-
-    static const bool isBlack[12] = { false, true, false, true, false, false,
-                                      true, false, true, false, true, false };
-    auto keyRect = [&] (int m) -> Rectangle<float>
-    {
-        int whites = 0;
-        for (int n = loNote; n < m; ++n)
-            if (! isBlack[n % 12])
-                ++whites;
-        if (! isBlack[m % 12])
-            return { x0 + (float) whites * ww, y0, ww - 1.0f, kh };
-        return { x0 + (float) whites * ww - ww * 0.3f, y0, ww * 0.6f, kh * 0.58f };
-    };
-
-    auto keyColour = [&] (int m, Colour base) -> Colour
-    {
-        if (m == leadNote)
-            return ui::kLead;
-        for (int v = 0; v < ChoraleProcessor::kNumVoices; ++v)
-            if (voiceNote[v] == m)
-                return ui::kVoice[v];
-        return base;
-    };
-
-    for (int m = loNote; m < hiNote; ++m)
-        if (! isBlack[m % 12])
-        {
-            g.setColour (keyColour (m, Colour (0xffd9dce6)));
-            g.fillRoundedRectangle (keyRect (m), 2.0f);
-        }
-    for (int m = loNote; m < hiNote; ++m)
-        if (isBlack[m % 12])
-        {
-            g.setColour (keyColour (m, Colour (0xff181b22)));
-            g.fillRoundedRectangle (keyRect (m), 1.5f);
-        }
+    r.removeFromTop (6);
+    levelLbl.setBounds (r.removeFromTop (11));
+    level.setBounds (r);
 }
 
 //==============================================================================
@@ -612,8 +876,8 @@ ChoraleEditor::ChoraleEditor (ChoraleProcessor& p)
       proc (p),
       chips (p, [this] (int v) { selectVoice (v); }),
       stage (p, [this] (int v) { selectVoice (v); }),
-      detail (p),
-      keyboard (p)
+      mixer (p, [this] (int v) { selectVoice (v); }),
+      detail (p)
 {
     setLookAndFeel (&lnf);
 
@@ -691,9 +955,11 @@ ChoraleEditor::ChoraleEditor (ChoraleProcessor& p)
         addAndMakeVisible (fxLbls[i]);
     }
 
-    autoKeyLbl.setFont (Font (FontOptions (12.5f, Font::bold)));
-    autoKeyLbl.setColour (Label::textColourId, Colour (0xff7ee08a));
-    addAndMakeVisible (autoKeyLbl);
+    autoKeyLbl.setFont (Font (FontOptions (24.0f, Font::bold)));
+    autoKeyLbl.setColour (Label::textColourId, Colour (0xff8ef5a8));
+    autoKeyLbl.setJustificationType (Justification::centred);
+    autoKeyLbl.setInterceptsMouseClicks (false, false);
+    addChildComponent (autoKeyLbl);
 
     pitchLbl.setFont (Font (FontOptions (11.5f)));
     pitchLbl.setColour (Label::textColourId, ui::kDim);
@@ -707,13 +973,27 @@ ChoraleEditor::ChoraleEditor (ChoraleProcessor& p)
 
     addAndMakeVisible (chips);
     addAndMakeVisible (stage);
+    addAndMakeVisible (mixer);
     addAndMakeVisible (detail);
-    addAndMakeVisible (keyboard);
+
+    for (auto* b : { &stageBtn, &mixerBtn })
+    {
+        b->setClickingTogglesState (true);
+        b->setColour (TextButton::buttonColourId, ui::kPanelHi);
+        b->setColour (TextButton::buttonOnColourId, ui::kText);
+        b->setColour (TextButton::textColourOnId, Colour (0xff14161c));
+        b->setColour (TextButton::textColourOffId, ui::kDim);
+        addAndMakeVisible (*b);
+    }
+    stageBtn.onClick = [this] { setMainView (false); };
+    mixerBtn.onClick = [this] { setMainView (true); };
 
     chips.setSelected (1);
     stage.setSelected (0);
+    mixer.setSelected (0);
+    setMainView (false);
 
-    setSize (1120, 700);
+    setSize (1120, 648);
     startTimerHz (15);
 }
 
@@ -724,11 +1004,24 @@ ChoraleEditor::~ChoraleEditor()
 
 void ChoraleEditor::selectVoice (int v)
 {
-    if (v < 0) // lead chip: nothing to edit yet
+    if (v < 0)
         return;
     detail.setVoice (v);
     stage.setSelected (v);
+    mixer.setSelected (v);
     chips.setSelected (v + 1);
+}
+
+void ChoraleEditor::setMainView (bool mixerView)
+{
+    showMixer = mixerView;
+    stage.setVisible (! mixerView);
+    mixer.setVisible (mixerView);
+    detail.setVisible (! mixerView);
+    chips.setVisible (! mixerView);
+    stageBtn.setToggleState (! mixerView, dontSendNotification);
+    mixerBtn.setToggleState (mixerView, dontSendNotification);
+    resized();
 }
 
 void ChoraleEditor::applyPreset (int i)
@@ -790,53 +1083,99 @@ void ChoraleEditor::timerCallback()
         pitchLbl.setText ("-", dontSendNotification);
 
     const bool autoScale = (int) proc.apvts.getRawParameterValue ("scale")->load() == 0;
-    autoKeyLbl.setText (autoScale ? String (pcs[proc.uiRoot.load() % 12])
-                                        + (proc.uiMinor.load() ? " minor" : " major")
-                                  : String(),
-                        dontSendNotification);
+    if (autoScale)
+    {
+        autoKeyLbl.setText (String (pcs[proc.uiRoot.load() % 12])
+                                + (proc.uiMinor.load() ? " minor" : " major"),
+                            dontSendNotification);
+        autoKeyLbl.setColour (Label::textColourId, Colour (0xff8ef5a8));
+    }
+    else
+    {
+        const int rootPc = (int) proc.apvts.getRawParameterValue ("keyRoot")->load();
+        const int scaleIdx = (int) proc.apvts.getRawParameterValue ("scale")->load();
+        String scaleName = "Major";
+        if (auto* par = dynamic_cast<AudioParameterChoice*> (proc.apvts.getParameter ("scale")))
+            scaleName = par->choices[scaleIdx];
+        autoKeyLbl.setText (String (pcs[rootPc % 12]) + "  " + scaleName, dontSendNotification);
+        autoKeyLbl.setColour (Label::textColourId, ui::kText);
+    }
 
     detail.refresh();
+    detail.tick();
     chips.repaint();
-    keyboard.repaint();
 }
 
 void ChoraleEditor::paint (Graphics& g)
 {
     g.fillAll (ui::kBg);
     g.setColour (ui::kPanel.brighter (0.03f));
-    g.fillRect (getLocalBounds().removeFromTop (56));
+    g.fillRect (0, 0, getWidth(), 56);
     g.setColour (Colour (0xff232838));
     g.drawHorizontalLine (56, 0.0f, (float) getWidth());
 }
 
+void ChoraleEditor::paintOverChildren (Graphics& g)
+{
+    if (autoKeyLbl.getText().isEmpty())
+        return;
+
+    const auto r = autoKeyLbl.getBounds().toFloat().expanded (24.0f, 8.0f);
+    const bool detected = autoKeyLbl.findColour (Label::textColourId) == Colour (0xff8ef5a8);
+    if (detected)
+    {
+        ColourGradient glow (Colour (0xff8ef5a8).withAlpha (0.14f), r.getCentreX(), r.getCentreY(),
+                             Colours::transparentBlack, r.getCentreX(), r.getBottom() + 10.0f, true);
+        g.setGradientFill (glow);
+        g.fillRoundedRectangle (r, 10.0f);
+    }
+
+    g.setFont (autoKeyLbl.getFont());
+    g.setColour (autoKeyLbl.findColour (Label::textColourId));
+    g.drawText (autoKeyLbl.getText(), autoKeyLbl.getBounds(), Justification::centred);
+}
+
+void ChoraleEditor::layoutHeader()
+{
+    const int w = getWidth();
+    const int pad = 14;
+
+    titleLbl.setBounds (pad, 18, 100, 24);
+    preset.setBounds (pad + 108, 15, 190, 26);
+    stageBtn.setBounds (pad + 306, 16, 54, 24);
+    mixerBtn.setBounds (pad + 364, 16, 54, 24);
+
+    autoKeyLbl.setBounds (w / 2 - 160, 12, 320, 32);
+    autoKeyLbl.setVisible (true);
+
+    const int rightW = 348;
+    const int rx = w - pad - rightW;
+    keyLbl.setBounds (rx, 6, 62, 14);
+    keyRoot.setBounds (rx, 20, 62, 25);
+    scaleLbl.setBounds (rx + 68, 6, 104, 14);
+    scale.setBounds (rx + 68, 20, 104, 25);
+    correctLbl.setBounds (rx + 178, 6, 88, 14);
+    correct.setBounds (rx + 178, 20, 88, 25);
+    const int mixSz = 32;
+    const int mixX = w - pad - mixSz;
+    mixLbl.setBounds (mixX - 2, 6, mixSz + 4, 12);
+    mix.setBounds (mixX, 20, mixSz, mixSz);
+}
+
 void ChoraleEditor::resized()
 {
+    layoutHeader();
+
     auto r = getLocalBounds();
+    r.removeFromTop (56);
 
-    auto header = r.removeFromTop (56).reduced (14, 0);
-    titleLbl.setBounds (header.removeFromLeft (110));
-    header.removeFromLeft (8);
-    preset.setBounds (header.removeFromLeft (190).withSizeKeepingCentre (190, 26));
-    header.removeFromLeft (16);
-
-    auto labelledCombo = [&] (Label& l, ComboBox& c, int w)
+    if (! showMixer)
     {
-        auto area = header.removeFromLeft (w);
-        l.setBounds (area.removeFromTop (15).translated (0, 6));
-        c.setBounds (area.withSizeKeepingCentre (w, 25).translated (0, 1));
-        header.removeFromLeft (8);
-    };
-    labelledCombo (keyLbl, keyRoot, 62);
-    labelledCombo (scaleLbl, scale, 104);
-    labelledCombo (correctLbl, correct, 88);
-    header.removeFromLeft (4);
-    autoKeyLbl.setBounds (header.removeFromLeft (86));
-
-    auto mixArea = header.removeFromRight (52);
-    mix.setBounds (mixArea.removeFromTop (43).translated (0, 3));
-    mixLbl.setBounds (mixArea);
-
-    chips.setBounds (r.removeFromTop (38));
+        auto chipRow = r.removeFromTop (38);
+        chips.setBounds (chipRow.reduced (14, 0));
+    }
+    else
+        r.removeFromTop (4);
 
     auto footer = r.removeFromBottom (26).reduced (14, 2);
     pitchLbl.setBounds (footer.removeFromLeft (160));
@@ -855,10 +1194,12 @@ void ChoraleEditor::resized()
         fxLbls[i].setBounds (cell);
     }
 
-    keyboard.setBounds (r.removeFromBottom (52).reduced (14, 4));
-
     r.reduce (14, 6);
-    detail.setBounds (r.removeFromLeft (236));
-    r.removeFromLeft (10);
+    if (! showMixer)
+    {
+        detail.setBounds (r.removeFromLeft (220));
+        r.removeFromLeft (8);
+    }
     stage.setBounds (r);
+    mixer.setBounds (r);
 }

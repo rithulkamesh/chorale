@@ -1,140 +1,165 @@
 # Chorale
 
-**Open-source vocal harmonizer & stacker (VST3 / AU / Standalone — macOS, Windows, Linux).**
-Sing one line, get a full vocal production: harmony stacks, pedal notes,
-MIDI-driven chords, pitch correction, doubling — eight formant-preserving
-voices from a single mono vocal.
+You sing one line. Chorale hands you the stack.
+
+VST3, AU, and standalone on macOS, Windows, and Linux. Mono vocal in. Eight
+harmonies out: diatonic stacks, pedal drones, MIDI-driven chords, pitch
+correction, doubling. Time-domain PSOLA keeps the singer's throat instead of
+turning them into a chipmunk.
 
 ![Chorale UI](docs/screenshot.png)
 
-## How it works
+## Download
 
+Grab the latest zip for your OS from the repo **Releases** page (tags matching `v*`).
+No compiler required. Unzip, copy the plugins in, rescan your DAW.
+
+| Platform | Zip | Install to |
+|----------|-----|------------|
+| macOS | `Chorale-macOS.zip` | `.component` → `~/Library/Audio/Plug-Ins/Components/`, `.vst3` → `~/Library/Audio/Plug-Ins/VST3/`, `.app` anywhere |
+| Windows | `Chorale-Windows.zip` | `.vst3` → `C:\Program Files\Common Files\VST3` |
+| Linux | `Chorale-Linux.zip` | `.vst3` → `~/.vst3` |
+
+macOS builds are universal (Apple Silicon + Intel) and **unsigned**. On first open,
+macOS may block them. Right-click the plugin or app → **Open**, or allow in
+**System Settings → Privacy & Security**. No Apple Developer account needed on
+your end.
+
+Future CREPE/ONNX pitch models ship **inside the release zip**, same as the
+plugins. Users never fetch weights separately.
+
+## Under the hood
+
+```mermaid
+flowchart LR
+    IN["Mono vocal"] --> YIN["Pitch detection<br/><i>YIN</i>"]
+    YIN --> KEY["Key / scale engine<br/><i>Krumhansl-Schmuckler</i>"]
+    KEY --> TARGET["Per-voice<br/>target pitch"]
+
+    IN --> LEAD["Lead correction<br/><i>PSOLA</i>"]
+    LEAD --> LEADOUT["Lead<br/><i>latency-aligned</i>"]
+
+    TARGET --> SHIFT["8× TD-PSOLA<br/>pitch shifters"]
+    SHIFT --> MIX["Mix"]
+    LEADOUT --> MIX
+
+    FX["Tone · width · echo"] --> MIX
+    CTRL["Solo · mute · pan · level"] --> MIX
+    MIX --> OUT["Output"]
 ```
-mono vocal ──> pitch detection ──> key/scale engine ──> per-voice target pitch
-   (YIN)      (auto or manual)     (Krumhansl-Schmuckler)        │
-     │                                                           v
-     ├──> lead correction (PSOLA)          8x TD-PSOLA pitch shifters
-     v                                                           v
-   lead (latency-aligned) ────> mix <── tone / width / echo <── solo·mute·pan·level
-```
 
-Pitch shifting is time-domain PSOLA: grains are never resampled, so the
-singer's formants (vocal character) are preserved instead of chipmunked.
+Grains never get resampled. Formants stay put. That's the whole pitch-shift
+story.
 
-## Features
+## Voices
 
-- **8 harmony voices**, each in one of three modes:
-  - **Scale** — diatonic interval from the sung note (2nd–octave, up/down),
-    snapped to the key so 3rds come out major or minor as the key demands
-  - **Note** — the voice holds one fixed pitch while you move: alto pedals,
-    drones, static chord pads
-  - **MIDI** — the voice tracks notes you hold on a keyboard
-- Per-voice **level, pan, detune** (±50 cents), **solo & mute** — audition any
-  voice in isolation with one click
-- **Lead pitch correction**: Off / Natural (partial, musical) / Hard (full snap)
-- **Humanize**: slow decorrelated pitch drift + level flutter per voice, so
-  stacks sound like singers, not a rack unit
-- **Wet-bus FX**: tone (low-pass), stereo width, ping-pong echo with feedback
-- **Auto key detection** (Krumhansl-Schmuckler) or manual root + mode
-  (major, minor, church modes, chromatic)
-- **33 stock presets** across Duets, Stacks, Choirs, Octaves, Doublers,
-  Pedals, MIDI, Experimental — fully editable after applying; presets never
-  touch your mix setting
-- Radar stage UI: drag a voice bubble to set pan (horizontal) and level
-  (vertical), with a fine audio-reactive particle field; live keyboard strip
-  shows the lead note and every harmony target
-- Latency (2048 samples ≈ 46 ms @ 44.1k) reported to the host for automatic
-  compensation; AU passes `auval`
+Eight of them. Each picks a mode:
+
+- **Scale** - diatonic interval from whatever you sang (2nd through octave, up
+  or down), locked to the key so thirds land major or minor correctly
+- **Note** - holds one pitch while you move. Alto pedals, drones, static pads
+- **MIDI** - follows whatever you hold on a keyboard
+
+Per voice: level, pan, detune (±50¢), solo, mute. Solo exists because auditioning
+one harmony in a seven-voice wash is otherwise guesswork.
+
+**Lead correction:** off, natural (partial snap, still musical), or hard (full
+snap to scale).
+
+**Humanize** adds slow, independent pitch drift and level flutter so the stack
+reads as people, not a rack unit.
+
+**Wet bus:** tone (low-pass), stereo width, ping-pong echo with feedback.
+
+**Key:** auto-detect (Krumhansl-Schmuckler) or set root + mode yourself (major,
+minor, church modes, chromatic). **33 presets** across duets, stacks, choirs,
+octaves, doublers, pedals, MIDI, experimental. Apply one, then tear it apart.
+Presets never touch your mix.
+
+**UI:** radar stage for pan and level. **Mixer** view shows all eight gain faders
+with dB markings, live meters, solo/mute. Right-click a fader to type a level.
+Voice detail panel has the same dB fader plus detune and pan.
+
+**Latency:** 2048 samples (~46 ms @ 44.1 kHz), reported to the host for PDC. AU
+passes `auval`.
 
 ## Demos
 
-Synthesized renders in [`demos/`](demos/) (`lead_dry.wav`,
-`demo_harmony_diatonic.wav`, `demo_harmony_midi_chord.wav`), or render your
-own vocal offline without a DAW:
+[`demos/`](demos/) has synthesized renders: `lead_dry.wav`,
+`demo_harmony_diatonic.wav`, `demo_harmony_midi_chord.wav`.
+
+The release zips include a standalone app. For batch rendering without a DAW,
+use the `harmonize` CLI from a developer build (see below).
+
+## Developing
+
+Only needed if you are hacking on the code or running tests. Everyone else uses
+Releases.
+
+```sh
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+cmake --build build --target dsp_tests && ./build/dsp_tests
+```
+
+Offline renderer:
 
 ```sh
 build/harmonize in.wav out.wav [dryWet] [key|auto] [scale|auto] [wetonly]
 ```
 
-Reads PCM 16/24/32 or float WAV, prints the detected key, runs ~10× realtime.
-
-## Building
-
-Requires CMake ≥ 3.24 and a C++20 compiler. JUCE is fetched automatically.
-
-```sh
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build
-```
-
-Artifacts land in `build/Chorale_artefacts/Release/`. On macOS copy the
-`.component` to `~/Library/Audio/Plug-Ins/Components/` and/or the `.vst3` to
-`~/Library/Audio/Plug-Ins/VST3/`; on Windows copy the `.vst3` to
-`C:\Program Files\Common Files\VST3`; on Linux to `~/.vst3`.
-
-On Linux install the JUCE build dependencies first:
+CMake 3.24+, C++20. JUCE fetches on configure. Linux also needs:
 
 ```sh
 sudo apt-get install libasound2-dev libx11-dev libxext-dev libxrandr-dev \
   libxinerama-dev libxcursor-dev libfreetype6-dev libfontconfig1-dev libgl1-mesa-dev
 ```
 
-## Releases, signing, notarization
+### Code map
 
-CI builds and tests every push on macOS, Windows, and Linux
-(`.github/workflows/build.yml`). Pushing a `v*` tag builds release zips for
-all three platforms and attaches them to a GitHub Release
-(`.github/workflows/release.yml`); the macOS build is a universal binary
-(arm64 + x86_64) and is codesigned + notarized + stapled automatically when
-the signing secrets are configured (see the comment at the top of
-`release.yml`). To notarize a local build:
+```mermaid
+flowchart TB
+    subgraph Host["Plugin (JUCE)"]
+        PE["PluginEditor<br/>radar stage · mixer · particles"]
+        PP["PluginProcessor<br/>parameters · telemetry"]
+        PR["Presets.h<br/>stock harmony shapes"]
+    end
 
-```sh
-./scripts/notarize.sh build/Chorale_artefacts/Release \
-  you@appleid.com TEAMID1234 app-specific-password
+    subgraph Core["src/dsp/ (unit-testable)"]
+        HE["HarmonyEngine<br/>tracker → key → voices → bus FX → mix"]
+        YIN["YinTracker<br/>YIN + CMND + parabolic interp"]
+        KE["KeyEngine<br/>K-S key finding · interval calc"]
+        PS["PsolaShifter<br/>streaming TD-PSOLA"]
+        PT["PitchTracker.h<br/>interface; CREPE/ONNX plugs in here"]
+    end
+
+    subgraph Offline["Tools & tests"]
+        CLI["tools/harmonize.cpp<br/>WAV in → WAV out"]
+        TST["tests/test_dsp.cpp<br/>closed-loop pitch assertions"]
+    end
+
+    PE --> PP
+    PP --> HE
+    PR --> PP
+    HE --> YIN & KE & PS
+    YIN -.-> PT
+    CLI --> HE
+    TST --> Core
 ```
 
-## Testing
-
-```sh
-cmake --build build --target dsp_tests && ./build/dsp_tests
-```
-
-The DSP chain is pure C++ (no JUCE) and is tested closed-loop against
-synthesized vocal-like signals: the harmonized output is pitch-tracked and
-asserted to land on the target interval. Covers the YIN tracker, the interval
-calculator, key detection, the PSOLA shifter, all three voice modes, solo
-isolation, and hard pitch correction.
-
-## Architecture
-
-```
-src/
-  dsp/                  JUCE-free, unit-testable DSP core
-    PitchTracker.h      tracker interface (CREPE/ONNX drops in behind this)
-    YinTracker          YIN + CMND + parabolic interpolation
-    KeyEngine           K-S key finding + diatonic interval calculator
-    PsolaShifter        streaming TD-PSOLA, formant-preserving
-    HarmonyEngine       full chain: tracker -> key -> voices -> bus FX -> mix
-  PluginProcessor       JUCE wrapper, parameters, telemetry
-  PluginEditor          radar stage UI, particles, keyboard, detail panel
-  Presets.h             stock harmony shapes
-tools/harmonize.cpp     offline CLI (WAV in -> WAV out)
-tests/test_dsp.cpp      offline closed-loop tests
-scripts/notarize.sh     macOS codesign + notarytool + staple
-```
+CI runs on every push ([`build.yml`](.github/workflows/build.yml)). Tag `v*`
+to ship release zips on all platforms ([`release.yml`](.github/workflows/release.yml)).
 
 ## Roadmap
 
-- CREPE pitch tracking via ONNX Runtime (higher accuracy on noisy vocals)
-- World vocoder shift mode (independent formant *shifting*) + formant knob
-- Epoch-snapped PSOLA analysis marks (quality at larger shift ratios)
-- Tempo-synced echo; latency reduction / configurable lookahead
+- CREPE pitch tracking via ONNX Runtime (weights bundled in release zips)
+- World vocoder shift mode + formant knob
+- Epoch-snapped PSOLA marks (bigger shift ratios)
+- Tempo-synced echo, lower latency / configurable lookahead
 
 ## License
 
-[AGPL-3.0](LICENSE). Chorale is built on [JUCE](https://juce.com), which is
-available under AGPLv3 for open-source projects — hence this project's
-license. Planned integrations are compatible: World vocoder (BSD-3-Clause),
-ONNX Runtime (MIT). CREPE model weights have separate distribution terms and
-would ship as a user download, not bundled.
+[AGPL-3.0](LICENSE). JUCE is AGPLv3 for open source, so we are too.
+World vocoder (BSD-3) and ONNX Runtime (MIT) are on the radar. CREPE model
+weights ship with official releases once that tracker lands; no separate
+end-user download.
