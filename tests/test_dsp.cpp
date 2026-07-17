@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -18,6 +19,7 @@
 namespace
 {
 constexpr double kSr = 44100.0;
+constexpr double kPi = 3.14159265358979323846;
 int failures = 0;
 
 #define CHECK(cond)                                                          \
@@ -56,12 +58,12 @@ std::vector<float> synth (const std::vector<std::pair<double, double>>& notes, /
         const double f = midiHz (midi);
         for (int i = 0; i < n; ++i)
         {
-            const double f0 = f * (1.0 + vibratoDepth * std::sin (2.0 * M_PI * 5.0 * t));
+            const double f0 = f * (1.0 + vibratoDepth * std::sin (2.0 * kPi * 5.0 * t));
             phase += f0 / kSr;
             double s = 0.0;
             for (int k = 1; k <= 20; ++k)
                 if (k * f0 < kSr / 2.0)
-                    s += std::sin (2.0 * M_PI * k * phase) / k;
+                    s += std::sin (2.0 * kPi * k * phase) / k;
             out.push_back ((float) (0.25 * s));
             t += 1.0 / kSr;
         }
@@ -131,7 +133,7 @@ EngineResult runEngine (const std::vector<float>& in, const HarmonySettings& s,
 
 int main()
 {
-    system ("mkdir -p tests_out");
+    std::filesystem::create_directories ("tests_out");
 
     // 1. YIN accuracy on steady + vibrato tones.
     {
@@ -226,6 +228,34 @@ int main()
         CHECK_NEAR (trackedF0 (out.l, 16384, (int) (0.6 * kSr)), 220.0, 0.03);
         CHECK_NEAR (trackedF0 (out.l, (int) (0.85 * kSr), (int) out.l.size()), 220.0, 0.03);
         std::puts ("ok: engine Note mode holds A3 pedal across melody change");
+    }
+
+    // 6c. Solo isolates a voice: v1 (3rd up) soloed, v2 (octave up) active but
+    // not soloed -> output pitch is v1's E4, not polyphonic mush.
+    {
+        const auto tone = synth ({ { 60, 1.2 } });
+        HarmonySettings s;
+        s.dryWet = 1.0f;
+        s.scaleMode = 1;
+        s.voices[0] = { 1, 9, 57, 1.0f, 0.0f, 0.0f, true, false };  // Scale 3rd up, SOLO
+        s.voices[1] = { 1, 14, 57, 1.0f, 0.0f, 0.0f, false, false }; // Scale oct up
+        const auto out = runEngine (tone, s);
+        CHECK_NEAR (trackedF0 (out.l, 16384, (int) out.l.size()), midiHz (64), 0.03);
+        std::puts ("ok: solo isolates one voice");
+    }
+
+    // 6d. Hard pitch correction: lead sung 40 cents sharp of C4 -> corrected
+    // output lands on C4.
+    {
+        const auto tone = synth ({ { 60.4, 1.2 } });
+        HarmonySettings s;
+        s.dryWet = 0.0f; // lead only
+        s.scaleMode = 1;
+        s.correct = 2;
+        const auto out = runEngine (tone, s);
+        const double f = trackedF0 (out.l, 16384, (int) out.l.size());
+        CHECK_NEAR (f, midiHz (60), 0.012); // within ~20 cents of C4
+        std::puts ("ok: hard correction snaps +40c lead to the scale note");
     }
 
     // 7. Demo renders (listen: tests_out/*.wav).

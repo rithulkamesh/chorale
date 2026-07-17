@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(OpenHarmony VERSION 0.1.0 LANGUAGES C CXX)
+project(Chorale VERSION 0.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -13,12 +13,12 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(JUCE)
 
-juce_add_plugin(OpenHarmony
-    COMPANY_NAME "OpenHarmony"
-    PLUGIN_MANUFACTURER_CODE Ohrm
-    PLUGIN_CODE Ohvh
+juce_add_plugin(Chorale
+    COMPANY_NAME "Chorale"
+    PLUGIN_MANUFACTURER_CODE Chrl
+    PLUGIN_CODE Chor
     FORMATS VST3 AU Standalone
-    PRODUCT_NAME "OpenHarmony"
+    PRODUCT_NAME "Chorale"
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT TRUE          # MIDI-driven harmony mode (step 8)
     NEEDS_MIDI_OUTPUT FALSE
@@ -33,13 +33,13 @@ set(DSP_SOURCES
     src/dsp/HarmonyEngine.cpp
 )
 
-target_sources(OpenHarmony PRIVATE
+target_sources(Chorale PRIVATE
     src/PluginProcessor.cpp
     src/PluginEditor.cpp
     ${DSP_SOURCES}
 )
 
-target_compile_definitions(OpenHarmony PUBLIC
+target_compile_definitions(Chorale PUBLIC
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
@@ -53,7 +53,7 @@ target_include_directories(dsp_tests PRIVATE src)
 add_executable(harmonize tools/harmonize.cpp ${DSP_SOURCES})
 target_include_directories(harmonize PRIVATE src)
 
-target_link_libraries(OpenHarmony
+target_link_libraries(Chorale
     PRIVATE
         juce::juce_audio_utils
         juce::juce_dsp

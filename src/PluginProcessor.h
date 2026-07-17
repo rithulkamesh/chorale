@@ -3,15 +3,16 @@
 #include "dsp/HarmonyEngine.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 
-// Vocal harmonizer: mono in -> pitch detection -> key/scale interval calc ->
-// N formant-preserving PSOLA voices -> pan/mix with latency-aligned dry.
+// Chorale: vocal harmonizer / stacker. mono in -> pitch detection -> key/scale
+// interval calc -> N formant-preserving PSOLA voices (+ lead pitch correction)
+// -> wet-bus FX -> mix with latency-aligned lead.
 // All DSP lives in src/dsp (JUCE-free, tested offline by tests/test_dsp.cpp).
-class OpenHarmonyProcessor : public juce::AudioProcessor
+class ChoraleProcessor : public juce::AudioProcessor
 {
 public:
     static constexpr int kNumVoices = HarmonyEngine::kNumVoices;
 
-    OpenHarmonyProcessor();
+    ChoraleProcessor();
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -25,7 +26,7 @@ public:
     bool acceptsMidi() const override                      { return true; }
     bool producesMidi() const override                     { return false; }
     bool isMidiEffect() const override                     { return false; }
-    double getTailLengthSeconds() const override           { return 0.0; }
+    double getTailLengthSeconds() const override           { return 2.0; } // echo tail
 
     int getNumPrograms() override                          { return 1; }
     int getCurrentProgram() override                       { return 0; }
@@ -52,9 +53,11 @@ private:
     HarmonyEngine engine;
     std::vector<float> scratchIn, scratchR;
 
-    std::atomic<float>*pDryWet, *pKeyRoot, *pScale;
+    std::atomic<float>*pDryWet, *pKeyRoot, *pScale, *pCorrect, *pHumanize,
+        *pTone, *pWidth, *pEchoTime, *pEchoFb, *pEchoMix;
     std::atomic<float>*pMode[kNumVoices], *pDegree[kNumVoices], *pNote[kNumVoices],
-        *pGain[kNumVoices], *pPan[kNumVoices], *pDetune[kNumVoices];
+        *pGain[kNumVoices], *pPan[kNumVoices], *pDetune[kNumVoices],
+        *pSolo[kNumVoices], *pMute[kNumVoices];
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OpenHarmonyProcessor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ChoraleProcessor)
 };

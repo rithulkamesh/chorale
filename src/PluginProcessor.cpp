@@ -1,7 +1,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
-OpenHarmonyProcessor::OpenHarmonyProcessor()
+ChoraleProcessor::ChoraleProcessor()
     : AudioProcessor (BusesProperties()
                           .withInput ("Input", juce::AudioChannelSet::mono(), true)
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
@@ -10,6 +10,13 @@ OpenHarmonyProcessor::OpenHarmonyProcessor()
     pDryWet = apvts.getRawParameterValue ("dryWet");
     pKeyRoot = apvts.getRawParameterValue ("keyRoot");
     pScale = apvts.getRawParameterValue ("scale");
+    pCorrect = apvts.getRawParameterValue ("correct");
+    pHumanize = apvts.getRawParameterValue ("humanize");
+    pTone = apvts.getRawParameterValue ("tone");
+    pWidth = apvts.getRawParameterValue ("width");
+    pEchoTime = apvts.getRawParameterValue ("echoTime");
+    pEchoFb = apvts.getRawParameterValue ("echoFb");
+    pEchoMix = apvts.getRawParameterValue ("echoMix");
     for (int v = 0; v < kNumVoices; ++v)
     {
         const auto s = juce::String (v + 1);
@@ -19,10 +26,12 @@ OpenHarmonyProcessor::OpenHarmonyProcessor()
         pGain[v] = apvts.getRawParameterValue ("v" + s + "Gain");
         pPan[v] = apvts.getRawParameterValue ("v" + s + "Pan");
         pDetune[v] = apvts.getRawParameterValue ("v" + s + "Detune");
+        pSolo[v] = apvts.getRawParameterValue ("v" + s + "Solo");
+        pMute[v] = apvts.getRawParameterValue ("v" + s + "Mute");
     }
 }
 
-juce::AudioProcessorValueTreeState::ParameterLayout OpenHarmonyProcessor::createParameterLayout()
+juce::AudioProcessorValueTreeState::ParameterLayout ChoraleProcessor::createParameterLayout()
 {
     using namespace juce;
     AudioProcessorValueTreeState::ParameterLayout layout;
@@ -37,6 +46,20 @@ juce::AudioProcessorValueTreeState::ParameterLayout OpenHarmonyProcessor::create
         StringArray { "Auto", "Major", "Minor", "Dorian", "Phrygian", "Lydian",
                       "Mixolydian", "Locrian", "Chromatic" },
         0));
+    layout.add (std::make_unique<AudioParameterChoice> (
+        "correct", "Correct", StringArray { "Off", "Natural", "Hard" }, 0));
+    layout.add (std::make_unique<AudioParameterFloat> (
+        "humanize", "Humanize", NormalisableRange<float> (0.0f, 1.0f), 0.25f));
+    layout.add (std::make_unique<AudioParameterFloat> (
+        "tone", "Tone", NormalisableRange<float> (500.0f, 20000.0f, 0.0f, 0.35f), 20000.0f));
+    layout.add (std::make_unique<AudioParameterFloat> (
+        "width", "Width", NormalisableRange<float> (0.0f, 2.0f), 1.0f));
+    layout.add (std::make_unique<AudioParameterFloat> (
+        "echoTime", "Echo Time", NormalisableRange<float> (0.0f, 1000.0f), 0.0f));
+    layout.add (std::make_unique<AudioParameterFloat> (
+        "echoFb", "Echo Feedback", NormalisableRange<float> (0.0f, 0.9f), 0.35f));
+    layout.add (std::make_unique<AudioParameterFloat> (
+        "echoMix", "Echo Mix", NormalisableRange<float> (0.0f, 1.0f), 0.0f));
 
     StringArray degrees;
     const char* names[] = { "Oct", "7th", "6th", "5th", "4th", "3rd", "2nd" };
@@ -52,10 +75,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout OpenHarmonyProcessor::create
         notes.add (String (pcs[m % 12]) + String (m / 12 - 1));
 
     // Default = "Pop Stack": 3rd up left, 5th up right.
-    const int defMode[6] = { 1, 1, 0, 0, 0, 0 };
-    const int defDegree[6] = { 9, 11, 7, 7, 7, 7 };
-    const float defGain[6] = { 0.8f, 0.6f, 0.6f, 0.6f, 0.6f, 0.6f };
-    const float defPan[6] = { -0.4f, 0.4f, -0.7f, 0.7f, 0.0f, 0.0f };
+    const int defMode[8] = { 1, 1, 0, 0, 0, 0, 0, 0 };
+    const int defDegree[8] = { 9, 11, 7, 7, 7, 7, 7, 7 };
+    const float defGain[8] = { 0.8f, 0.6f, 0.6f, 0.6f, 0.6f, 0.6f, 0.6f, 0.6f };
+    const float defPan[8] = { -0.4f, 0.4f, -0.7f, 0.7f, -0.2f, 0.2f, -0.9f, 0.9f };
 
     for (int v = 0; v < kNumVoices; ++v)
     {
@@ -76,11 +99,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout OpenHarmonyProcessor::create
         layout.add (std::make_unique<AudioParameterFloat> (
             "v" + s + "Detune", "Voice " + s + " Detune",
             NormalisableRange<float> (-50.0f, 50.0f), 0.0f));
+        layout.add (std::make_unique<AudioParameterBool> (
+            "v" + s + "Solo", "Voice " + s + " Solo", false));
+        layout.add (std::make_unique<AudioParameterBool> (
+            "v" + s + "Mute", "Voice " + s + " Mute", false));
     }
     return layout;
 }
 
-void OpenHarmonyProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+void ChoraleProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     engine.prepare (sampleRate, samplesPerBlock);
     scratchIn.assign ((size_t) samplesPerBlock, 0.0f);
@@ -88,7 +115,7 @@ void OpenHarmonyProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     setLatencySamples (engine.latencySamples());
 }
 
-bool OpenHarmonyProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
+bool ChoraleProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
     if (layouts.getMainInputChannelSet() != juce::AudioChannelSet::mono())
         return false;
@@ -96,7 +123,7 @@ bool OpenHarmonyProcessor::isBusesLayoutSupported (const BusesLayout& layouts) c
     return out == juce::AudioChannelSet::mono() || out == juce::AudioChannelSet::stereo();
 }
 
-void OpenHarmonyProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
+void ChoraleProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
@@ -114,9 +141,17 @@ void OpenHarmonyProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     s.dryWet = *pDryWet;
     s.keyRoot = (int) *pKeyRoot;
     s.scaleMode = (int) *pScale;
+    s.correct = (int) *pCorrect;
+    s.humanize = *pHumanize;
+    s.tone = *pTone;
+    s.width = *pWidth;
+    s.echoTime = *pEchoTime;
+    s.echoFb = *pEchoFb;
+    s.echoMix = *pEchoMix;
     for (int v = 0; v < kNumVoices; ++v)
         s.voices[v] = { (int) *pMode[v], (int) *pDegree[v], 36 + (int) *pNote[v],
-                        *pGain[v], *pPan[v], *pDetune[v] };
+                        *pGain[v], *pPan[v], *pDetune[v],
+                        *pSolo[v] > 0.5f, *pMute[v] > 0.5f };
     engine.setSettings (s);
 
     if ((int) scratchIn.size() < n)
@@ -142,24 +177,24 @@ void OpenHarmonyProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     }
 }
 
-void OpenHarmonyProcessor::getStateInformation (juce::MemoryBlock& destData)
+void ChoraleProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     if (auto xml = apvts.copyState().createXml())
         copyXmlToBinary (*xml, destData);
 }
 
-void OpenHarmonyProcessor::setStateInformation (const void* data, int sizeInBytes)
+void ChoraleProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     if (auto xml = getXmlFromBinary (data, sizeInBytes))
         apvts.replaceState (juce::ValueTree::fromXml (*xml));
 }
 
-juce::AudioProcessorEditor* OpenHarmonyProcessor::createEditor()
+juce::AudioProcessorEditor* ChoraleProcessor::createEditor()
 {
-    return new OpenHarmonyEditor (*this);
+    return new ChoraleEditor (*this);
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
-    return new OpenHarmonyProcessor();
+    return new ChoraleProcessor();
 }

@@ -36,7 +36,7 @@ PitchEstimate YinTracker::analyze (const float* x)
     for (int tau = 1; tau <= tauMax; ++tau)
     {
         running += d[(size_t) tau];
-        cmnd[(size_t) tau] = running > 0.0 ? (float) (d[(size_t) tau] * tau / running) : 1.0f;
+        cmnd[(size_t) tau] = running > 0.0 ? (float) (d[(size_t) tau] * (double) tau / running) : 1.0f;
     }
 
     int best = -1;

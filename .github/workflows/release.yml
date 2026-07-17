@@ -1,0 +1,101 @@
+# Tag a version (e.g. v0.2.0) to build signed installers for all platforms
+# and attach them to a GitHub Release.
+#
+# macOS signing/notarization requires these repository secrets:
+#   MACOS_CERT_P12         base64-encoded Developer ID Application .p12
+#   MACOS_CERT_PASSWORD    password for the .p12
+#   APPLE_ID               Apple ID email used for notarization
+#   APPLE_TEAM_ID          10-char team id
+#   APPLE_APP_PASSWORD     app-specific password (appleid.apple.com)
+# Without the secrets the macOS job still builds, ad-hoc signed (unnotarized).
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    env:
+      HAVE_CERT: ${{ secrets.MACOS_CERT_P12 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (universal binary)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
+
+      - name: Build
+        run: cmake --build build
+
+      - name: DSP tests
+        run: ./build/dsp_tests
+
+      - name: Import signing certificate
+        if: env.HAVE_CERT != ''
+        run: |
+          echo "$HAVE_CERT" | base64 --decode > cert.p12
+          security create-keychain -p tmp build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p tmp build.keychain
+          security import cert.p12 -k build.keychain \
+            -P "${{ secrets.MACOS_CERT_PASSWORD }}" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k tmp build.keychain
+          rm cert.p12
+
+      - name: Sign and notarize
+        if: env.HAVE_CERT != ''
+        run: |
+          ./scripts/notarize.sh \
+            "build/Chorale_artefacts/Release" \
+            "${{ secrets.APPLE_ID }}" "${{ secrets.APPLE_TEAM_ID }}" \
+            "${{ secrets.APPLE_APP_PASSWORD }}"
+
+      - name: Package
+        run: |
+          cd build/Chorale_artefacts/Release
+          zip -ry ../../../Chorale-macOS.zip AU/Chorale.component VST3/Chorale.vst3 Standalone/Chorale.app
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: Chorale-macOS.zip
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -B build
+      - name: Build
+        run: cmake --build build --config Release
+      - name: DSP tests
+        run: ./build/Release/dsp_tests.exe
+      - name: Package
+        run: Compress-Archive -Path build/Chorale_artefacts/Release/VST3/Chorale.vst3, build/Chorale_artefacts/Release/Standalone/Chorale.exe -DestinationPath Chorale-Windows.zip
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: Chorale-Windows.zip
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libx11-dev libxext-dev \
+            libxrandr-dev libxinerama-dev libxcursor-dev libfreetype6-dev \
+            libfontconfig1-dev libgl1-mesa-dev
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build
+      - name: DSP tests
+        run: ./build/dsp_tests
+      - name: Package
+        run: |
+          cd build/Chorale_artefacts/Release
+          zip -ry ../../../Chorale-Linux.zip VST3/Chorale.vst3 Standalone/Chorale
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: Chorale-Linux.zip

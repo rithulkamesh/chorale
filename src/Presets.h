@@ -25,8 +25,8 @@ struct Preset
 {
     const char* category;
     const char* name;
-    float dryWet;
-    VoiceSpec v[6];
+    float dryWet; // informational only — applying a preset must NOT touch the mix
+    VoiceSpec v[8];
 };
 
 // degree helper: scale-step offset -> choice index
