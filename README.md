@@ -7,7 +7,19 @@ harmonies out: diatonic stacks, pedal drones, MIDI-driven chords, pitch
 correction, doubling. Time-domain PSOLA keeps the singer's throat instead of
 turning them into a chipmunk.
 
-![Chorale UI](docs/screenshot.png)
+## UI
+
+Toggle **Stage** and **Mixer** in the header. Same eight voices, two layouts.
+
+**Stage** — drag voices on the radar for pan and gain. Voice chips up top,
+detail panel for interval, detune, solo, and mute.
+
+![Chorale — Stage view](docs/stage.png)
+
+**Mixer** — all eight strips at once: mode, interval, detune, pan, and dB faders
+with live meters. Right-click a fader to type a level.
+
+![Chorale — Mixer view](docs/mixer.png)
 
 ## Download
 
@@ -76,10 +88,6 @@ minor, church modes, chromatic). **33 presets** across duets, stacks, choirs,
 octaves, doublers, pedals, MIDI, experimental. Apply one, then tear it apart.
 Presets never touch your mix.
 
-**UI:** radar stage for pan and level. **Mixer** view shows all eight gain faders
-with dB markings, live meters, solo/mute. Right-click a fader to type a level.
-Voice detail panel has the same dB fader plus detune and pan.
-
 **Latency:** 2048 samples (~46 ms @ 44.1 kHz), reported to the host for PDC. AU
 passes `auval`.
 
@@ -120,7 +128,7 @@ sudo apt-get install libasound2-dev libx11-dev libxext-dev libxrandr-dev \
 ```mermaid
 flowchart TB
     subgraph Host["Plugin (JUCE)"]
-        PE["PluginEditor<br/>radar stage · mixer · particles"]
+        PE["PluginEditor<br/>stage · mixer · presets"]
         PP["PluginProcessor<br/>parameters · telemetry"]
         PR["Presets.h<br/>stock harmony shapes"]
     end
