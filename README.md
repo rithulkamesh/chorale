@@ -82,7 +82,23 @@ three layouts.
 - **Updates:** silent GitHub Releases check on open; optional download to
   `~/Downloads`. No telemetry
 
-Demos live in [`demos/`](demos/). Release zips include the standalone app.
+## Demos
+
+Synthesized renders (~3 s). GitHub has no inline audio player, so these are
+small waveform `.mp4`s (unmute in the player). WAVs also live in
+[`demos/`](demos/).
+
+**Lead (dry)**
+
+https://github.com/rithulkamesh/chorale/raw/master/demos/lead_dry.mp4
+
+**Harmony · diatonic**
+
+https://github.com/rithulkamesh/chorale/raw/master/demos/demo_harmony_diatonic.mp4
+
+**Harmony · MIDI chord**
+
+https://github.com/rithulkamesh/chorale/raw/master/demos/demo_harmony_midi_chord.mp4
 
 ## Developing
 
@@ -121,13 +137,6 @@ flowchart TB
 
 CI: [`build.yml`](.github/workflows/build.yml). Tag `v*` to ship zips:
 [`release.yml`](.github/workflows/release.yml).
-
-## Roadmap
-
-- CREPE pitch tracking via ONNX Runtime
-- World vocoder shift mode + formant knob
-- Epoch-snapped PSOLA marks
-- Tempo-synced echo, lower / configurable latency
 
 ## License
 
