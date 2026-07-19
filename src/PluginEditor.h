@@ -61,7 +61,9 @@ private:
     juce::Label fxLbls[6];
     juce::TextButton stageBtn { "STAGE" }, mixerBtn { "MIXER" }, fxBtn { "FX" };
     juce::TextButton undoBtn, redoBtn, aBtn { "A" }, bBtn { "B" };
-    juce::HyperlinkButton updateBtn;
+    juce::TextButton midiAdaptBtn { "MIDI ADAPT" };
+    juce::TextButton updateBtn;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> midiAdaptAtt;
 
     NoteChips chips;
     StageView stage;

@@ -374,6 +374,101 @@ int main()
         std::puts ("ok: master EQ high-shelf cut darkens the mix");
     }
 
+    // 6h. MIDI adapt: a Scale-mode 3rd-up voice (C4 -> E4) retunes to the
+    // nearest held chord tone (held F major -> F4), and returns to E4 when
+    // nothing is held.
+    {
+        const auto tone = synth ({ { 60, 1.2 } });
+        HarmonySettings s;
+        s.dryWet = 1.0f;
+        s.scaleMode = 1;
+        s.midiAdapt = true;
+        s.voices[0] = { 1, 9, 57, 1.0f, 0.0f, 0.0f }; // 3rd up -> E4 normally
+        const auto out = runEngine (tone, s, { 65, 69, 72 }); // F major held
+        CHECK_NEAR (trackedF0 (out.l, 16384, (int) out.l.size()), midiHz (65), 0.03); // F4
+        const auto released = runEngine (tone, s); // nothing held -> diatonic 3rd
+        CHECK_NEAR (trackedF0 (released.l, 16384, (int) released.l.size()), midiHz (64), 0.03);
+        std::puts ("ok: MIDI adapt snaps layers to held chord, releases to intervals");
+    }
+
+    // 6i. Master compressor: engaged on the mix, level clearly changes.
+    {
+        const auto tone = synth ({ { 60, 1.0 } });
+        HarmonySettings s;
+        s.dryWet = 1.0f;
+        s.scaleMode = 1;
+        s.voices[0] = { 1, 9, 57, 1.0f, 0.0f, 0.0f };
+        auto rms = [] (const std::vector<float>& x)
+        {
+            double e = 0;
+            for (float v : x)
+                e += v * v;
+            return std::sqrt (e / (double) x.size());
+        };
+        const auto flat = runEngine (tone, s);
+        auto compS = s;
+        compS.mCompOn = true;
+        compS.mCompThresh = -30.0f;
+        compS.mCompRatio = 8.0f;
+        const auto out = runEngine (tone, compS);
+        const double dbDelta = 20.0 * std::log10 (rms (out.l) / (rms (flat.l) + 1e-12));
+        CHECK (std::abs (dbDelta) > 1.0);
+        std::puts ("ok: master compressor engages on the mix");
+    }
+
+    // 6j. Multi-out + voice FX: stems carry the voice's channel chain (an EQ
+    // cut on voice 1 shows up in its stem, voice 2's stem untouched).
+    {
+        const auto tone = synth ({ { 60, 1.2 } });
+        HarmonySettings s;
+        s.dryWet = 1.0f;
+        s.scaleMode = 1;
+        s.humanize = 0.0f;
+        s.voices[0] = { 1, 9, 57, 1.0f, 0.0f, 0.0f };
+        s.voices[1] = { 1, 11, 57, 1.0f, 0.0f, 0.0f };
+
+        auto runStems = [&] (const HarmonySettings& set, std::vector<float>& v1, std::vector<float>& v2)
+        {
+            HarmonyEngine eng;
+            eng.prepare (kSr, 512);
+            eng.setSettings (set);
+            const size_t len = tone.size();
+            std::vector<float> mainL (len), mainR (len), v1r (len), v2r (len);
+            v1.assign (len, 0.0f);
+            v2.assign (len, 0.0f);
+            for (size_t i = 0; i < len; i += 512)
+            {
+                const int n = (int) std::min<size_t> (512, len - i);
+                HarmonyEngine::MultiOut mo;
+                mo.mainL = mainL.data() + i;
+                mo.mainR = mainR.data() + i;
+                mo.voiceL[0] = v1.data() + i;
+                mo.voiceR[0] = v1r.data() + i;
+                mo.voiceL[1] = v2.data() + i;
+                mo.voiceR[1] = v2r.data() + i;
+                eng.process (tone.data() + i, mo, n);
+            }
+        };
+        auto rms = [] (const std::vector<float>& x)
+        {
+            double e = 0;
+            for (float v : x)
+                e += v * v;
+            return std::sqrt (e / (double) x.size());
+        };
+
+        std::vector<float> v1a, v2a, v1b, v2b;
+        runStems (s, v1a, v2a);
+        auto cutS = s;
+        cutS.voices[0].eqOn = true;
+        cutS.voices[0].eqF[3] = 330.0f;
+        cutS.voices[0].eqG[3] = -12.0f;
+        runStems (cutS, v1b, v2b);
+        CHECK (rms (v1b) < rms (v1a) * 0.75);              // stem 1 reflects its EQ
+        CHECK (std::abs (rms (v2b) / rms (v2a) - 1.0) < 0.05); // stem 2 untouched
+        std::puts ("ok: stems carry per-voice FX chains");
+    }
+
     // 7. Demo renders (listen: tests_out/*.wav).
     {
         const std::vector<std::pair<double, double>> melody = {

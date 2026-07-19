@@ -50,6 +50,8 @@ public:
 
     // Spectrum-analyzer tap: ch 0..7 = voices, 8 = master mix.
     void readScope (int ch, float* dst, int n) const { engine.readScope (ch, dst, n); }
+    // Compressor gain reduction (negative dB), same channel scheme.
+    float compGrDb (int ch) const { return engine.compGrDb (ch); }
 
     // Live telemetry for the editor (written on the audio thread).
     std::atomic<float> uiF0 { 0.0f };   // 0 = unvoiced
@@ -75,7 +77,8 @@ private:
     std::atomic<float>*pEqOn[kNumVoices], *pEqF[kNumVoices][8], *pEqG[kNumVoices][8],
         *pCompOn[kNumVoices], *pCompT[kNumVoices], *pCompR[kNumVoices],
         *pSendEcho[kNumVoices], *pSendVerb[kNumVoices];
-    std::atomic<float>*pMEqOn, *pMEqF[8], *pMEqG[8], *pVerbSize, *pVerbMix;
+    std::atomic<float>*pMEqOn, *pMEqF[8], *pMEqG[8], *pVerbSize, *pVerbMix,
+        *pMCompOn, *pMCompT, *pMCompR, *pMidiAdapt;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ChoraleProcessor)
 };

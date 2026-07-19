@@ -47,11 +47,17 @@ struct HarmonySettings
         float sendEcho = 0, sendVerb = 0;
     } voices[8];
 
-    // Master section: reverb bus + 8-band EQ on the main mix.
+    // MIDI adapt: held notes retune all sounding Scale/Note voices to the
+    // nearest chord tone; released -> back to their configured intervals.
+    bool midiAdapt = false;
+
+    // Master section: EQ -> compressor -> reverb bus on the main mix.
     float verbSize = 0.5f, verbMix = 0;
     bool mEqOn = false;
     float mEqF[8] = { 80, 200, 500, 1200, 2500, 5000, 9000, 14000 };
     float mEqG[8] = {};
+    bool mCompOn = false;
+    float mCompThresh = 0, mCompRatio = 2;
 };
 
 // Full harmonizer chain, JUCE-free so it can run offline in tests:
@@ -115,6 +121,9 @@ public:
 
     // Visualiser scope taps: ch 0..7 = post-FX voices, 8 = master mix.
     // Lock-free-ish (races give at worst a glitchy frame of spectrum).
+    // Compressor gain reduction (negative dB): ch 0..7 voices, 8 = master.
+    float compGrDb (int ch) const { return compGrOut[ch]; }
+
     static constexpr int kScopeChannels = kNumVoices + 1;
     static constexpr int kScopeSize = 4096; // power of two
     void readScope (int ch, float* dst, int n) const
@@ -155,6 +164,8 @@ private:
     std::vector<float> sendEL, sendER, sendV; // per-block send accumulators
     SimpleReverb verb;
     ChannelEq masterEqL, masterEqR;
+    Compressor masterCompL, masterCompR;
+    float compGrOut[kNumVoices + 1] = {};
     std::vector<float> echoL, echoR;
     uint64_t echoPos = 0;
     float toneL = 0, toneR = 0; // one-pole LPF state

@@ -97,9 +97,38 @@ ChoraleEditor::ChoraleEditor (ChoraleProcessor& p)
     content.addAndMakeVisible (fx);
     content.addAndMakeVisible (detail);
 
-    updateBtn.setFont (ui::sans (10.5f, true), false, Justification::centredRight);
-    updateBtn.setColour (HyperlinkButton::textColourId, ui::kText);
+    // Auto-update: appears when a newer release exists; click downloads the
+    // platform zip to ~/Downloads, then click again to reveal it.
+    updateBtn.setColour (TextButton::textColourOffId, ui::kText);
+    updateBtn.onClick = [this]
+    {
+        using update::Dl;
+        const auto dl = update::state().dl.load();
+        if (dl == Dl::idle || dl == Dl::failed)
+        {
+            update::state().dl.store (Dl::idle);
+            update::startDownload();
+            updateBtn.setButtonText ("Downloading...");
+            updateBtn.setEnabled (false);
+        }
+        else if (dl == Dl::done)
+        {
+            File f;
+            {
+                const SpinLock::ScopedLockType sl (update::state().lock);
+                f = update::state().downloaded;
+            }
+            f.revealToUser();
+        }
+    };
     content.addChildComponent (updateBtn);
+
+    midiAdaptBtn.setClickingTogglesState (true);
+    midiAdaptBtn.setColour (TextButton::buttonOnColourId, ui::kText);
+    midiAdaptBtn.setColour (TextButton::textColourOnId, ui::kBg);
+    content.addAndMakeVisible (midiAdaptBtn);
+    midiAdaptAtt = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (
+        proc.apvts, "midiAdapt", midiAdaptBtn);
 
     for (auto* b : { &stageBtn, &mixerBtn, &fxBtn })
     {
@@ -392,16 +421,30 @@ void ChoraleEditor::timerCallback()
                                 + " ms lookahead",
                             dontSendNotification);
 
-    if (update::state().available.load() && ! updateBtn.isVisible())
+    if (update::state().available.load())
     {
-        String tag;
+        using update::Dl;
+        const auto dl = update::state().dl.load();
+        if (! updateBtn.isVisible())
         {
-            const SpinLock::ScopedLockType sl (update::state().lock);
-            tag = update::state().tag;
+            String tag;
+            {
+                const SpinLock::ScopedLockType sl (update::state().lock);
+                tag = update::state().tag;
+            }
+            updateBtn.setButtonText ("Get " + tag);
+            updateBtn.setVisible (true);
         }
-        updateBtn.setButtonText (tag + " available");
-        updateBtn.setURL (URL ("https://github.com/rithulkamesh/chorale/releases/latest"));
-        updateBtn.setVisible (true);
+        if (dl == Dl::done && ! updateBtn.isEnabled())
+        {
+            updateBtn.setButtonText ("Show download");
+            updateBtn.setEnabled (true);
+        }
+        else if (dl == Dl::failed && ! updateBtn.isEnabled())
+        {
+            updateBtn.setButtonText ("Retry download");
+            updateBtn.setEnabled (true);
+        }
     }
 
     undoBtn.setEnabled (proc.undoManager.canUndo());
@@ -528,6 +571,8 @@ void ChoraleEditor::layoutContent()
     aBtn.setBounds (footer.removeFromLeft (24));
     footer.removeFromLeft (4);
     bBtn.setBounds (footer.removeFromLeft (24));
+    footer.removeFromLeft (12);
+    midiAdaptBtn.setBounds (footer.removeFromLeft (86));
     latencyLbl.setBounds (footer.removeFromRight (120));
     footer.removeFromRight (6);
     latMode.setBounds (footer.removeFromRight (84).withSizeKeepingCentre (84, 22));

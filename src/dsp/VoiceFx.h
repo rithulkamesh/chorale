@@ -126,12 +126,14 @@ struct ChannelEq
 struct Compressor
 {
     float env = 0, aAtt = 0, aRel = 0;
+    float grDb = 0; // last gain reduction (negative dB, excl. makeup) for UI
 
     void prepare (double sr)
     {
         aAtt = (float) std::exp (-1.0 / (0.005 * sr));
         aRel = (float) std::exp (-1.0 / (0.120 * sr));
         env = 0;
+        grDb = 0;
     }
 
     inline float process (float x, float threshDb, float ratio)
@@ -142,9 +144,13 @@ struct Compressor
         const float envDb = 20.0f * std::log10 (std::max (env, 1e-6f));
         const float over = envDb - threshDb;
         if (over <= 0.0f)
+        {
+            grDb = 0.0f;
             return x;
+        }
         const float inv = 1.0f - 1.0f / std::max (ratio, 1.01f);
-        const float gainDb = -over * inv - threshDb * inv * 0.4f; // reduction + auto makeup
+        grDb = -over * inv;
+        const float gainDb = grDb - threshDb * inv * 0.4f; // reduction + auto makeup
         return x * std::pow (10.0f, gainDb / 20.0f);
     }
 };

@@ -15,6 +15,20 @@ int chromaticSemis (int steps)
     const int i = steps - 7 * k;
     return 12 * k + maj[i];
 }
+
+// Nearest note (in semitones) whose pitch class is in the held-MIDI set;
+// ties resolve downward.
+int snapToHeldPc (int note, const bool heldPc[12])
+{
+    for (int d = 0; d <= 6; ++d)
+    {
+        if (heldPc[((note - d) % 12 + 12) % 12])
+            return note - d;
+        if (heldPc[((note + d) % 12 + 12) % 12])
+            return note + d;
+    }
+    return note;
+}
 } // namespace
 
 void HarmonyEngine::prepare (double sampleRate, int maxBlockSize)
@@ -50,6 +64,8 @@ void HarmonyEngine::prepare (double sampleRate, int maxBlockSize)
     verb.prepare (sr);
     masterEqL.reset();
     masterEqR.reset();
+    masterCompL.prepare (sr);
+    masterCompR.prepare (sr);
     echoL.assign (kEchoSize, 0.0f);
     echoR.assign (kEchoSize, 0.0f);
     echoPos = kEchoSize * 4;
@@ -167,6 +183,7 @@ void HarmonyEngine::process (const float* in, const MultiOut& out, int n)
         const float fb = std::clamp (settings.echoFb, 0.0f, 0.9f);
         const float dryGain = 1.0f - settings.dryWet;
         const bool masterEqOn = settings.mEqOn && masterEqL.active;
+        const bool masterCompOn = settings.mCompOn && settings.mCompThresh < -0.5f;
 
         for (int i = 0; i < todo; ++i)
         {
@@ -210,6 +227,11 @@ void HarmonyEngine::process (const float* in, const MultiOut& out, int n)
             {
                 L[i] = masterEqL.process (L[i]);
                 R[i] = masterEqR.process (R[i]);
+            }
+            if (masterCompOn)
+            {
+                L[i] = masterCompL.process (L[i], settings.mCompThresh, settings.mCompRatio);
+                R[i] = masterCompR.process (R[i], settings.mCompThresh, settings.mCompRatio);
             }
             scopeRing[kNumVoices][(scopeWrite.load (std::memory_order_relaxed) + (uint32_t) i)
                                   & (kScopeSize - 1)] = (L[i] + R[i]) * 0.5f;
@@ -281,9 +303,15 @@ void HarmonyEngine::runAnalysis()
     verb.setSize (settings.verbSize);
 
     int held[16], numHeld = 0;
-    for (int note = 0; note < 128 && numHeld < 16; ++note)
+    bool heldPc[12] = {};
+    for (int note = 0; note < 128; ++note)
         if (heldNotes[note])
-            held[numHeld++] = note;
+        {
+            if (numHeld < 16)
+                held[numHeld++] = note;
+            heldPc[note % 12] = true;
+        }
+    const bool adapt = settings.midiAdapt && numHeld > 0;
 
     bool anySolo = false;
     for (const auto& vs : settings.voices)
@@ -305,9 +333,11 @@ void HarmonyEngine::runAnalysis()
                 case VM::Scale:
                 {
                     const int steps = vs.degree - 7;
-                    const int target = scaleIdx == KeyEngine::kChromatic
-                                           ? nearest + chromaticSemis (steps)
-                                           : KeyEngine::harmonyTarget (nearest, rootPc, scaleIdx, steps);
+                    int target = scaleIdx == KeyEngine::kChromatic
+                                     ? nearest + chromaticSemis (steps)
+                                     : KeyEngine::harmonyTarget (nearest, rootPc, scaleIdx, steps);
+                    if (adapt) // held chord overrides the diatonic target
+                        target = snapToHeldPc (target, heldPc);
                     // Offset from the *nearest* note so the singer's detune
                     // carries into the harmony instead of being auto-tuned away.
                     ratio = std::exp2 ((float) (target - nearest) / 12.0f);
@@ -315,9 +345,14 @@ void HarmonyEngine::runAnalysis()
                     break;
                 }
                 case VM::Note: // absolute pitch: alto-pedal / drone voice
-                    ratio = (float) std::exp2 ((vs.note - detMidi) / 12.0);
+                {
+                    int target = vs.note;
+                    if (adapt)
+                        target = snapToHeldPc (target, heldPc);
+                    ratio = (float) std::exp2 ((target - detMidi) / 12.0);
                     sounding = true;
                     break;
+                }
                 case VM::Midi:
                     if (midiIdx < numHeld)
                     {
@@ -361,5 +396,9 @@ void HarmonyEngine::runAnalysis()
 
         voiceHzOut[vi] = sounding && g > 0.0f ? lastEst.f0 * ratio : 0.0f;
         voiceGainOut[vi] = sounding ? g : 0.0f;
+        compGrOut[vi] = vs.compOn ? voices[vi].comp.grDb : 0.0f;
     }
+    compGrOut[kNumVoices] = settings.mCompOn
+                                ? std::min (masterCompL.grDb, masterCompR.grDb)
+                                : 0.0f;
 }

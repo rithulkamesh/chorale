@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(Chorale VERSION 1.0.0 LANGUAGES C CXX)
+project(Chorale VERSION 1.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -23,7 +23,7 @@ juce_add_plugin(Chorale
     NEEDS_MIDI_INPUT TRUE          # MIDI-driven harmony mode (step 8)
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
-    COPY_PLUGIN_AFTER_BUILD FALSE
+    COPY_PLUGIN_AFTER_BUILD TRUE
 )
 
 set(DSP_SOURCES
@@ -51,6 +51,7 @@ target_sources(Chorale PRIVATE
     src/ui/MixerView.cpp
     src/ui/VoiceDetailPanel.cpp
     src/ui/EqPanel.cpp
+    src/ui/CompPanel.cpp
     src/ui/FxView.cpp
     ${DSP_SOURCES}
 )

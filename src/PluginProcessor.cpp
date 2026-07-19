@@ -62,6 +62,10 @@ ChoraleProcessor::ChoraleProcessor()
     }
     pVerbSize = apvts.getRawParameterValue ("verbSize");
     pVerbMix = apvts.getRawParameterValue ("verbMix");
+    pMCompOn = apvts.getRawParameterValue ("mCompOn");
+    pMCompT = apvts.getRawParameterValue ("mCompT");
+    pMCompR = apvts.getRawParameterValue ("mCompR");
+    pMidiAdapt = apvts.getRawParameterValue ("midiAdapt");
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout ChoraleProcessor::createParameterLayout()
@@ -188,6 +192,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout ChoraleProcessor::createPara
         "verbSize", "Reverb Size", NormalisableRange<float> (0.0f, 1.0f), 0.5f));
     layout.add (std::make_unique<AudioParameterFloat> (
         "verbMix", "Reverb Mix", NormalisableRange<float> (0.0f, 1.0f), 0.0f));
+    layout.add (std::make_unique<AudioParameterBool> ("mCompOn", "Master Comp On", false));
+    layout.add (std::make_unique<AudioParameterFloat> (
+        "mCompT", "Master Comp Threshold", NormalisableRange<float> (-40.0f, 0.0f), 0.0f));
+    layout.add (std::make_unique<AudioParameterFloat> (
+        "mCompR", "Master Comp Ratio", NormalisableRange<float> (1.0f, 8.0f), 2.0f));
+    layout.add (std::make_unique<AudioParameterBool> (
+        "midiAdapt", "MIDI Adapt", false));
     return layout;
 }
 
@@ -244,6 +255,10 @@ void ChoraleProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     s.lowLatency = *pLatMode > 0.5f;
     s.verbSize = *pVerbSize;
     s.verbMix = *pVerbMix;
+    s.mCompOn = *pMCompOn > 0.5f;
+    s.mCompThresh = *pMCompT;
+    s.mCompRatio = *pMCompR;
+    s.midiAdapt = *pMidiAdapt > 0.5f;
     s.mEqOn = *pMEqOn > 0.5f;
     for (int b = 0; b < 8; ++b)
     {

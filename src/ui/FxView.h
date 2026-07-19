@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../PluginProcessor.h"
+#include "CompPanel.h"
 #include "EqPanel.h"
 #include "Theme.h"
 
@@ -61,10 +62,12 @@ private:
     juce::Label voiceTitle, masterTitle, voiceHint, masterHint;
     ChainStrip voiceChain, masterChain;
     EqPanel voiceEq, masterEq;
-    juce::Slider compT, compR, sendEcho, sendVerb, verbSize, verbMix;
-    juce::Label compTLbl, compRLbl, sendEchoLbl, sendVerbLbl, verbSizeLbl, verbMixLbl;
+    CompPanel voiceComp, masterComp;
+    juce::Slider compT, compR, sendEcho, sendVerb, verbSize, verbMix, mCompT, mCompR;
+    juce::Label compTLbl, compRLbl, sendEchoLbl, sendVerbLbl, verbSizeLbl, verbMixLbl,
+        mCompTLbl, mCompRLbl;
     juce::TextButton solo { "S" }, mute { "M" };
     std::unique_ptr<SliderAtt> compTAtt, compRAtt, sendEchoAtt, sendVerbAtt,
-        verbSizeAtt, verbMixAtt;
+        verbSizeAtt, verbMixAtt, mCompTAtt, mCompRAtt;
     std::unique_ptr<ButtonAtt> soloAtt, muteAtt;
 };

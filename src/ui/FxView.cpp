@@ -112,7 +112,9 @@ FxView::FxView (ChoraleProcessor& p)
       voiceChain (p, [this] (int m) { showVoiceModule (m); }),
       masterChain (p, [this] (int m) { showMasterModule (m); }),
       voiceEq (p, ui::voiceInk (0)),
-      masterEq (p, ui::kText)
+      masterEq (p, ui::kText),
+      voiceComp (p, ui::voiceInk (0)),
+      masterComp (p, ui::kText)
 {
     voiceTitle.setFont (ui::sans (13.0f, true));
     masterTitle.setFont (ui::sans (13.0f, true));
@@ -134,13 +136,17 @@ FxView::FxView (ChoraleProcessor& p)
     {
         Array<ChainStrip::Module> mods;
         mods.add ({ "EQ", "mEqOn" });
+        mods.add ({ "COMP", "mCompOn" });
         mods.add ({ "REVERB", "" });
         masterChain.setModules (std::move (mods));
     }
 
     addChildComponent (voiceEq);
     addChildComponent (masterEq);
+    addChildComponent (voiceComp);
+    addChildComponent (masterComp);
     masterEq.setTarget ("mEq", ChoraleProcessor::kNumVoices, ui::kText);
+    masterComp.setTarget ("mComp", ChoraleProcessor::kNumVoices, ui::kText);
 
     initKnob (compT, compTLbl, "THRESH");
     initKnob (compR, compRLbl, "RATIO");
@@ -148,6 +154,12 @@ FxView::FxView (ChoraleProcessor& p)
     initKnob (sendVerb, sendVerbLbl, "VERB SEND");
     initKnob (verbSize, verbSizeLbl, "SIZE");
     initKnob (verbMix, verbMixLbl, "MIX");
+    initKnob (mCompT, mCompTLbl, "THRESH");
+    initKnob (mCompR, mCompRLbl, "RATIO");
+    mCompTAtt = std::make_unique<SliderAtt> (proc.apvts, "mCompT", mCompT);
+    mCompRAtt = std::make_unique<SliderAtt> (proc.apvts, "mCompR", mCompR);
+    mCompT.setColour (Slider::rotarySliderFillColourId, ui::kAccent);
+    mCompR.setColour (Slider::rotarySliderFillColourId, ui::kAccent);
 
     verbSizeAtt = std::make_unique<SliderAtt> (proc.apvts, "verbSize", verbSize);
     verbMixAtt = std::make_unique<SliderAtt> (proc.apvts, "verbMix", verbMix);
@@ -187,6 +199,7 @@ void FxView::setVoice (int v)
     voiceTitle.setText ("VOICE " + id + "  CHAIN", dontSendNotification);
     voiceTitle.setColour (Label::textColourId, accent);
     voiceEq.setTarget ("v" + id + "Eq", voice, accent);
+    voiceComp.setTarget ("v" + id + "Comp", voice, accent);
     {
         Array<ChainStrip::Module> mods;
         mods.add ({ "EQ", "v" + id + "EqOn" });
@@ -220,6 +233,7 @@ void FxView::showVoiceModule (int m)
 {
     voiceChain.setSelected (m);
     voiceEq.setVisible (m == 0);
+    voiceComp.setVisible (m == 1);
     compT.setVisible (m == 1);
     compTLbl.setVisible (m == 1);
     compR.setVisible (m == 1);
@@ -238,11 +252,16 @@ void FxView::showMasterModule (int m)
 {
     masterChain.setSelected (m);
     masterEq.setVisible (m == 0);
-    verbSize.setVisible (m == 1);
-    verbSizeLbl.setVisible (m == 1);
-    verbMix.setVisible (m == 1);
-    verbMixLbl.setVisible (m == 1);
-    masterHint.setText (m == 1 ? "Shared bus: voices feed it via VERB sends" : "",
+    masterComp.setVisible (m == 1);
+    mCompT.setVisible (m == 1);
+    mCompTLbl.setVisible (m == 1);
+    mCompR.setVisible (m == 1);
+    mCompRLbl.setVisible (m == 1);
+    verbSize.setVisible (m == 2);
+    verbSizeLbl.setVisible (m == 2);
+    verbMix.setVisible (m == 2);
+    verbMixLbl.setVisible (m == 2);
+    masterHint.setText (m == 2 ? "Shared bus: voices feed it via VERB sends" : "",
                         dontSendNotification);
     resized();
 }
@@ -254,11 +273,15 @@ void FxView::timerCallback()
     const bool eqOn = proc.apvts.getRawParameterValue ("v" + id + "EqOn")->load() > 0.5f;
     const bool compOn = proc.apvts.getRawParameterValue ("v" + id + "CompOn")->load() > 0.5f;
     const bool mEqOn = proc.apvts.getRawParameterValue ("mEqOn")->load() > 0.5f;
+    const bool mCompOn = proc.apvts.getRawParameterValue ("mCompOn")->load() > 0.5f;
     voiceEq.setAlpha (eqOn ? 1.0f : 0.45f);
     masterEq.setAlpha (mEqOn ? 1.0f : 0.45f);
-    for (auto* c : { (Component*) &compT, (Component*) &compR, (Component*) &compTLbl,
-                     (Component*) &compRLbl })
+    for (auto* c : { (Component*) &voiceComp, (Component*) &compT, (Component*) &compR,
+                     (Component*) &compTLbl, (Component*) &compRLbl })
         c->setAlpha (compOn ? 1.0f : 0.45f);
+    for (auto* c : { (Component*) &masterComp, (Component*) &mCompT, (Component*) &mCompR,
+                     (Component*) &mCompTLbl, (Component*) &mCompRLbl })
+        c->setAlpha (mCompOn ? 1.0f : 0.45f);
 }
 
 void FxView::paint (Graphics& g)
@@ -291,19 +314,24 @@ void FxView::resized()
     voiceHint.setBounds (left.removeFromBottom (14));
 
     voiceEq.setBounds (left.reduced (0, 2));
-    // Knob editors centre in the same area.
+    // COMP module: graph + knob column.
+    {
+        auto area = left.reduced (0, 2);
+        auto knobCol = area.removeFromRight (96);
+        voiceComp.setBounds (area);
+        compT.setBounds (Rectangle<int> (56, 56).withCentre ({ knobCol.getCentreX(), knobCol.getCentreY() - 44 }));
+        compTLbl.setBounds (Rectangle<int> (90, 13).withCentre ({ knobCol.getCentreX(), knobCol.getCentreY() - 10 }));
+        compR.setBounds (Rectangle<int> (56, 56).withCentre ({ knobCol.getCentreX(), knobCol.getCentreY() + 34 }));
+        compRLbl.setBounds (Rectangle<int> (90, 13).withCentre ({ knobCol.getCentreX(), knobCol.getCentreY() + 68 }));
+    }
+    // Send modules: single centred knob.
     {
         auto area = left;
-        auto knobCell = [&] (Slider& s, Label& l, int cx)
-        {
-            s.setBounds (Rectangle<int> (64, 64).withCentre ({ cx, area.getCentreY() - 8 }));
-            l.setBounds (Rectangle<int> (100, 14).withCentre ({ cx, area.getCentreY() + 34 }));
-        };
         const int mid = area.getCentreX();
-        knobCell (compT, compTLbl, mid - 70);
-        knobCell (compR, compRLbl, mid + 70);
-        knobCell (sendEcho, sendEchoLbl, mid);
-        knobCell (sendVerb, sendVerbLbl, mid);
+        sendEcho.setBounds (Rectangle<int> (64, 64).withCentre ({ mid, area.getCentreY() - 8 }));
+        sendEchoLbl.setBounds (Rectangle<int> (100, 14).withCentre ({ mid, area.getCentreY() + 34 }));
+        sendVerb.setBounds (Rectangle<int> (64, 64).withCentre ({ mid, area.getCentreY() - 8 }));
+        sendVerbLbl.setBounds (Rectangle<int> (100, 14).withCentre ({ mid, area.getCentreY() + 34 }));
     }
 
     // --- Master side -------------------------------------------------------
@@ -314,6 +342,15 @@ void FxView::resized()
     masterHint.setBounds (right.removeFromBottom (14));
 
     masterEq.setBounds (right.reduced (0, 2));
+    {
+        auto area = right.reduced (0, 2);
+        auto knobCol = area.removeFromRight (88);
+        masterComp.setBounds (area);
+        mCompT.setBounds (Rectangle<int> (52, 52).withCentre ({ knobCol.getCentreX(), knobCol.getCentreY() - 42 }));
+        mCompTLbl.setBounds (Rectangle<int> (84, 13).withCentre ({ knobCol.getCentreX(), knobCol.getCentreY() - 10 }));
+        mCompR.setBounds (Rectangle<int> (52, 52).withCentre ({ knobCol.getCentreX(), knobCol.getCentreY() + 32 }));
+        mCompRLbl.setBounds (Rectangle<int> (84, 13).withCentre ({ knobCol.getCentreX(), knobCol.getCentreY() + 64 }));
+    }
     {
         auto area = right;
         const int mid = area.getCentreX();

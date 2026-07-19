@@ -9,17 +9,24 @@ turning them into a chipmunk.
 
 ## UI
 
-Toggle **Stage** and **Mixer** in the header. Same eight voices, two layouts.
+Toggle **Stage**, **Mixer**, and **FX** in the header. Same eight voices,
+three layouts.
 
 **Stage** — drag voices on the radar for pan and gain. Voice chips up top,
 detail panel for interval, detune, solo, and mute.
 
 ![Chorale — Stage view](docs/stage.png)
 
-**Mixer** — all eight strips at once: mode, interval, detune, pan, and dB faders
-with live meters. Right-click a fader to type a level.
+**Mixer** — all eight strips at once: mode, interval, detune, pan, mute/solo,
+and dB faders with live meters. Right-click a fader to type a level.
 
 ![Chorale — Mixer view](docs/mixer.png)
+
+**FX** — every voice's channel chain and the master chain as clickable module
+cards. The EQ draws over a live spectrum; the compressor is a transfer-curve
+graph with a gain-reduction meter.
+
+![Chorale — FX view](docs/fx.png)
 
 ## Download
 
@@ -86,9 +93,18 @@ shown as module cards. Click a card to edit it; click its power dot to bypass
 it (EQ and compressor are opt-in and cost nothing while off). The EQ module is
 a graphical **8-band EQ** (low shelf + six full-range peaks + high shelf; drag
 nodes, double-click resets a band) drawn over a **live spectrum** of that
-voice; COMP is threshold/ratio with auto makeup; ECHO/VERB are sends into the
-shared echo and reverb buses. The master chain is `EQ → REVERB` on the main
+voice; COMP is a **transfer-curve graph** — drag the knee to set the
+threshold, watch the input level ride the curve and the GR meter move — with
+threshold/ratio knobs and auto makeup; ECHO/VERB are sends into the shared
+echo and reverb buses. The master chain is `EQ → COMP → REVERB` on the main
 mix. Mute/solo live in every view.
+
+**MIDI adapt:** toggle **MIDI ADAPT** in the footer and every sounding
+Scale/Note voice retunes to the nearest tone of whatever chord you hold on a
+MIDI keyboard (live or from a MIDI track) — release the keys and the layers
+fall back to their configured intervals. For fully MIDI-driven layers
+(vocoder-style, each voice tracking a held note directly), set voices to
+**MIDI** mode instead.
 
 **Key:** auto-detect (Krumhansl-Schmuckler) or set root + mode yourself (major,
 minor, church modes, chromatic). **33 presets** across duets, stacks, choirs,
@@ -110,8 +126,10 @@ session. IBM Plex Sans/Mono (OFL) is embedded, so the UI renders identically
 everywhere.
 
 **Updates:** on open, Chorale asks GitHub once (in the background) whether a
-newer release exists; if so, a small link appears in the footer. No telemetry,
-nothing sent — a single releases-API read, and it fails silently offline.
+newer release exists; if so, a **Get vX.Y.Z** button appears in the footer —
+click it and Chorale downloads the release zip for your platform straight to
+`~/Downloads`, then reveals it. No telemetry, nothing sent — a single
+releases-API read, and it fails silently offline.
 
 ## Multi-output
 
@@ -128,8 +146,9 @@ with the main out.
 - **Ableton Live**: extra audio tracks → *Audio From* → Chorale → pick a bus
 - **Bitwig/Cubase**: enable the plugin's output buses in the routing panel
 
-Stems follow the plugin mixer: what you hear per voice is what the stem
-carries.
+Stems follow the plugin mixer *and* each voice's FX chain: what you hear per
+voice — EQ, compression, level, pan — is what the stem carries (sends stay on
+the main mix).
 
 ## Demos
 
