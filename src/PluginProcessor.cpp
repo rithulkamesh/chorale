@@ -18,7 +18,7 @@ juce::AudioProcessor::BusesProperties ChoraleProcessor::choraleBuses()
 
 ChoraleProcessor::ChoraleProcessor()
     : AudioProcessor (choraleBuses()),
-      apvts (*this, nullptr, "PARAMS", createParameterLayout())
+      apvts (*this, &undoManager, "PARAMS", createParameterLayout())
 {
     pDryWet = apvts.getRawParameterValue ("dryWet");
     pKeyRoot = apvts.getRawParameterValue ("keyRoot");
@@ -30,6 +30,7 @@ ChoraleProcessor::ChoraleProcessor()
     pEchoTime = apvts.getRawParameterValue ("echoTime");
     pEchoFb = apvts.getRawParameterValue ("echoFb");
     pEchoMix = apvts.getRawParameterValue ("echoMix");
+    pLatMode = apvts.getRawParameterValue ("latMode");
     for (int v = 0; v < kNumVoices; ++v)
     {
         const auto s = juce::String (v + 1);
@@ -41,7 +42,26 @@ ChoraleProcessor::ChoraleProcessor()
         pDetune[v] = apvts.getRawParameterValue ("v" + s + "Detune");
         pSolo[v] = apvts.getRawParameterValue ("v" + s + "Solo");
         pMute[v] = apvts.getRawParameterValue ("v" + s + "Mute");
+        pEqOn[v] = apvts.getRawParameterValue ("v" + s + "EqOn");
+        for (int b = 0; b < 8; ++b)
+        {
+            pEqF[v][b] = apvts.getRawParameterValue ("v" + s + "Eq" + juce::String (b + 1) + "F");
+            pEqG[v][b] = apvts.getRawParameterValue ("v" + s + "Eq" + juce::String (b + 1) + "G");
+        }
+        pCompOn[v] = apvts.getRawParameterValue ("v" + s + "CompOn");
+        pCompT[v] = apvts.getRawParameterValue ("v" + s + "CompT");
+        pCompR[v] = apvts.getRawParameterValue ("v" + s + "CompR");
+        pSendEcho[v] = apvts.getRawParameterValue ("v" + s + "SendEcho");
+        pSendVerb[v] = apvts.getRawParameterValue ("v" + s + "SendVerb");
     }
+    pMEqOn = apvts.getRawParameterValue ("mEqOn");
+    for (int b = 0; b < 8; ++b)
+    {
+        pMEqF[b] = apvts.getRawParameterValue ("mEq" + juce::String (b + 1) + "F");
+        pMEqG[b] = apvts.getRawParameterValue ("mEq" + juce::String (b + 1) + "G");
+    }
+    pVerbSize = apvts.getRawParameterValue ("verbSize");
+    pVerbMix = apvts.getRawParameterValue ("verbMix");
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout ChoraleProcessor::createParameterLayout()
@@ -73,6 +93,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout ChoraleProcessor::createPara
         "echoFb", "Echo Feedback", NormalisableRange<float> (0.0f, 0.9f), 0.35f));
     layout.add (std::make_unique<AudioParameterFloat> (
         "echoMix", "Echo Mix", NormalisableRange<float> (0.0f, 1.0f), 0.0f));
+    layout.add (std::make_unique<AudioParameterChoice> (
+        "latMode", "Latency", StringArray { "Studio", "Live" }, 0));
 
     StringArray degrees;
     const char* names[] = { "Oct", "7th", "6th", "5th", "4th", "3rd", "2nd" };
@@ -116,7 +138,56 @@ juce::AudioProcessorValueTreeState::ParameterLayout ChoraleProcessor::createPara
             "v" + s + "Solo", "Voice " + s + " Solo", false));
         layout.add (std::make_unique<AudioParameterBool> (
             "v" + s + "Mute", "Voice " + s + " Mute", false));
+
+        // Channel chain: EQ and compressor are opt-in modules.
+        layout.add (std::make_unique<AudioParameterBool> (
+            "v" + s + "EqOn", "Voice " + s + " EQ On", false));
+        layout.add (std::make_unique<AudioParameterBool> (
+            "v" + s + "CompOn", "Voice " + s + " Comp On", false));
+        static const float defF[8] = { 80, 200, 500, 1200, 2500, 5000, 9000, 14000 };
+        for (int b = 0; b < 8; ++b)
+        {
+            const auto bs = String (b + 1);
+            layout.add (std::make_unique<AudioParameterFloat> (
+                "v" + s + "Eq" + bs + "F", "Voice " + s + " EQ " + bs + " Freq",
+                NormalisableRange<float> (20.0f, 20000.0f, 0.0f, 0.25f), defF[b]));
+            layout.add (std::make_unique<AudioParameterFloat> (
+                "v" + s + "Eq" + bs + "G", "Voice " + s + " EQ " + bs + " Gain",
+                NormalisableRange<float> (-12.0f, 12.0f), 0.0f));
+        }
+        layout.add (std::make_unique<AudioParameterFloat> (
+            "v" + s + "CompT", "Voice " + s + " Comp Threshold",
+            NormalisableRange<float> (-40.0f, 0.0f), 0.0f));
+        layout.add (std::make_unique<AudioParameterFloat> (
+            "v" + s + "CompR", "Voice " + s + " Comp Ratio",
+            NormalisableRange<float> (1.0f, 8.0f), 2.0f));
+        layout.add (std::make_unique<AudioParameterFloat> (
+            "v" + s + "SendEcho", "Voice " + s + " Echo Send",
+            NormalisableRange<float> (0.0f, 1.0f), 0.0f));
+        layout.add (std::make_unique<AudioParameterFloat> (
+            "v" + s + "SendVerb", "Voice " + s + " Reverb Send",
+            NormalisableRange<float> (0.0f, 1.0f), 0.0f));
     }
+
+    // Master section.
+    {
+        layout.add (std::make_unique<AudioParameterBool> ("mEqOn", "Master EQ On", false));
+        static const float defF[8] = { 80, 200, 500, 1200, 2500, 5000, 9000, 14000 };
+        for (int b = 0; b < 8; ++b)
+        {
+            const auto bs = String (b + 1);
+            layout.add (std::make_unique<AudioParameterFloat> (
+                "mEq" + bs + "F", "Master EQ " + bs + " Freq",
+                NormalisableRange<float> (20.0f, 20000.0f, 0.0f, 0.25f), defF[b]));
+            layout.add (std::make_unique<AudioParameterFloat> (
+                "mEq" + bs + "G", "Master EQ " + bs + " Gain",
+                NormalisableRange<float> (-12.0f, 12.0f), 0.0f));
+        }
+    }
+    layout.add (std::make_unique<AudioParameterFloat> (
+        "verbSize", "Reverb Size", NormalisableRange<float> (0.0f, 1.0f), 0.5f));
+    layout.add (std::make_unique<AudioParameterFloat> (
+        "verbMix", "Reverb Mix", NormalisableRange<float> (0.0f, 1.0f), 0.0f));
     return layout;
 }
 
@@ -170,11 +241,41 @@ void ChoraleProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     s.echoTime = *pEchoTime;
     s.echoFb = *pEchoFb;
     s.echoMix = *pEchoMix;
+    s.lowLatency = *pLatMode > 0.5f;
+    s.verbSize = *pVerbSize;
+    s.verbMix = *pVerbMix;
+    s.mEqOn = *pMEqOn > 0.5f;
+    for (int b = 0; b < 8; ++b)
+    {
+        s.mEqF[b] = *pMEqF[b];
+        s.mEqG[b] = *pMEqG[b];
+    }
     for (int v = 0; v < kNumVoices; ++v)
-        s.voices[v] = { (int) *pMode[v], (int) *pDegree[v], 36 + (int) *pNote[v],
-                        *pGain[v], *pPan[v], *pDetune[v],
-                        *pSolo[v] > 0.5f, *pMute[v] > 0.5f };
+    {
+        auto& vs = s.voices[v];
+        vs.mode = (int) *pMode[v];
+        vs.degree = (int) *pDegree[v];
+        vs.note = 36 + (int) *pNote[v];
+        vs.gain = *pGain[v];
+        vs.pan = *pPan[v];
+        vs.detune = *pDetune[v];
+        vs.solo = *pSolo[v] > 0.5f;
+        vs.mute = *pMute[v] > 0.5f;
+        vs.eqOn = *pEqOn[v] > 0.5f;
+        for (int b = 0; b < 8; ++b)
+        {
+            vs.eqF[b] = *pEqF[v][b];
+            vs.eqG[b] = *pEqG[v][b];
+        }
+        vs.compOn = *pCompOn[v] > 0.5f;
+        vs.compThresh = *pCompT[v];
+        vs.compRatio = *pCompR[v];
+        vs.sendEcho = *pSendEcho[v];
+        vs.sendVerb = *pSendVerb[v];
+    }
     engine.setSettings (s);
+    if (getLatencySamples() != engine.latencySamples())
+        setLatencySamples (engine.latencySamples());
 
     if ((int) scratchIn.size() < n)
     {
@@ -219,16 +320,32 @@ void ChoraleProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     }
 }
 
+void ChoraleProcessor::toggleAB()
+{
+    auto current = apvts.copyState();
+    if (abStored.isValid())
+        apvts.replaceState (abStored);
+    // First toggle: the other slot starts as a copy, so nothing audibly jumps.
+    abStored = current;
+    abActive.store (abActive.load() ^ 1);
+}
+
 void ChoraleProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     if (auto xml = apvts.copyState().createXml())
+    {
+        xml->setAttribute ("uiScale", (double) uiScale.load());
         copyXmlToBinary (*xml, destData);
+    }
 }
 
 void ChoraleProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     if (auto xml = getXmlFromBinary (data, sizeInBytes))
+    {
+        uiScale.store ((float) xml->getDoubleAttribute ("uiScale", 1.0));
         apvts.replaceState (juce::ValueTree::fromXml (*xml));
+    }
 }
 
 juce::AudioProcessorEditor* ChoraleProcessor::createEditor()

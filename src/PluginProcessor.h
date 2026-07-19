@@ -37,7 +37,19 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
+    // Declared before apvts so it outlives / predates the tree that uses it.
+    juce::UndoManager undoManager;
     juce::AudioProcessorValueTreeState apvts;
+
+    // A/B compare: swap the whole parameter state with the stored slot.
+    void toggleAB();
+    std::atomic<int> abActive { 0 };
+
+    // Editor scale, persisted with the plugin state (applied on next open).
+    std::atomic<float> uiScale { 1.0f };
+
+    // Spectrum-analyzer tap: ch 0..7 = voices, 8 = master mix.
+    void readScope (int ch, float* dst, int n) const { engine.readScope (ch, dst, n); }
 
     // Live telemetry for the editor (written on the audio thread).
     std::atomic<float> uiF0 { 0.0f };   // 0 = unvoiced
@@ -55,10 +67,15 @@ private:
     std::vector<float> scratchIn, scratchR;
 
     std::atomic<float>*pDryWet, *pKeyRoot, *pScale, *pCorrect, *pHumanize,
-        *pTone, *pWidth, *pEchoTime, *pEchoFb, *pEchoMix;
+        *pTone, *pWidth, *pEchoTime, *pEchoFb, *pEchoMix, *pLatMode;
+    juce::ValueTree abStored; // the inactive A/B slot
     std::atomic<float>*pMode[kNumVoices], *pDegree[kNumVoices], *pNote[kNumVoices],
         *pGain[kNumVoices], *pPan[kNumVoices], *pDetune[kNumVoices],
         *pSolo[kNumVoices], *pMute[kNumVoices];
+    std::atomic<float>*pEqOn[kNumVoices], *pEqF[kNumVoices][8], *pEqG[kNumVoices][8],
+        *pCompOn[kNumVoices], *pCompT[kNumVoices], *pCompR[kNumVoices],
+        *pSendEcho[kNumVoices], *pSendVerb[kNumVoices];
+    std::atomic<float>*pMEqOn, *pMEqF[8], *pMEqG[8], *pVerbSize, *pVerbMix;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ChoraleProcessor)
 };

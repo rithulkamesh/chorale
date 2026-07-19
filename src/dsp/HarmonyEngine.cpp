@@ -39,6 +39,17 @@ void HarmonyEngine::prepare (double sampleRate, int maxBlockSize)
     leadTmp.assign (chunk, 0.0f);
     wetL.assign (chunk, 0.0f);
     wetR.assign (chunk, 0.0f);
+    sendEL.assign (chunk, 0.0f);
+    sendER.assign (chunk, 0.0f);
+    sendV.assign (chunk, 0.0f);
+    for (auto& v : voices)
+    {
+        v.eq.reset();
+        v.comp.prepare (sr);
+    }
+    verb.prepare (sr);
+    masterEqL.reset();
+    masterEqR.reset();
     echoL.assign (kEchoSize, 0.0f);
     echoR.assign (kEchoSize, 0.0f);
     echoPos = kEchoSize * 4;
@@ -83,7 +94,7 @@ void HarmonyEngine::process (const float* in, const MultiOut& out, int n)
             anaRing[anaPos++ & kRingMask] = src[i];
             dryRing[dryPos & kRingMask] = src[i];
             if (settings.correct == 0)
-                leadTmp[(size_t) i] = dryRing[(dryPos - (uint64_t) PsolaShifter::kLatency) & kRingMask];
+                leadTmp[(size_t) i] = dryRing[(dryPos - (uint64_t) curLatency) & kRingMask];
             ++dryPos;
         }
 
@@ -96,12 +107,25 @@ void HarmonyEngine::process (const float* in, const MultiOut& out, int n)
 
         std::fill_n (wetL.begin(), (size_t) todo, 0.0f);
         std::fill_n (wetR.begin(), (size_t) todo, 0.0f);
+        std::fill_n (sendEL.begin(), (size_t) todo, 0.0f);
+        std::fill_n (sendER.begin(), (size_t) todo, 0.0f);
+        std::fill_n (sendV.begin(), (size_t) todo, 0.0f);
         for (int vi = 0; vi < kNumVoices; ++vi)
         {
             auto& v = voices[vi];
+            const auto& vs = settings.voices[vi];
             float* tapL = out.voiceL[vi];
             float* tapR = out.voiceR[vi];
             v.shifter.process (src, tmp.data(), todo);
+
+            // Channel chain on the mono shifted signal: EQ -> compressor.
+            if (vs.eqOn && v.eq.active)
+                for (int i = 0; i < todo; ++i)
+                    tmp[(size_t) i] = v.eq.process (tmp[(size_t) i]);
+            if (vs.compOn && vs.compThresh < -0.5f)
+                for (int i = 0; i < todo; ++i)
+                    tmp[(size_t) i] = v.comp.process (tmp[(size_t) i], vs.compThresh, vs.compRatio);
+
             for (int i = 0; i < todo; ++i)
             {
                 v.gainL += 0.002f * (v.targetGainL - v.gainL);
@@ -110,6 +134,15 @@ void HarmonyEngine::process (const float* in, const MultiOut& out, int n)
                 const float vr = v.gainR * tmp[(size_t) i];
                 wetL[(size_t) i] += vl;
                 wetR[(size_t) i] += vr;
+                if (vs.sendEcho > 0.001f)
+                {
+                    sendEL[(size_t) i] += vs.sendEcho * vl;
+                    sendER[(size_t) i] += vs.sendEcho * vr;
+                }
+                if (vs.sendVerb > 0.001f)
+                    sendV[(size_t) i] += vs.sendVerb * (vl + vr) * 0.5f;
+                scopeRing[vi][(scopeWrite.load (std::memory_order_relaxed) + (uint32_t) i)
+                              & (kScopeSize - 1)] = vl + vr;
                 if (tapL != nullptr)
                 {
                     tapL[done + i] = vl;
@@ -123,9 +156,17 @@ void HarmonyEngine::process (const float* in, const MultiOut& out, int n)
             1.0f - std::exp (-2.0f * kPi * std::clamp (settings.tone, 200.0f, 20000.0f) / (float) sr);
         const float width = std::clamp (settings.width, 0.0f, 2.0f);
         const int echoSamps = (int) (std::clamp (settings.echoTime, 0.0f, 1200.0f) * 0.001f * sr);
-        const bool echoOn = echoSamps > 32 && settings.echoMix > 0.001f;
+        bool anyEchoSend = false, anyVerbSend = false;
+        for (const auto& vs : settings.voices)
+        {
+            anyEchoSend = anyEchoSend || vs.sendEcho > 0.001f;
+            anyVerbSend = anyVerbSend || vs.sendVerb > 0.001f;
+        }
+        const bool echoOn = echoSamps > 32 && (settings.echoMix > 0.001f || anyEchoSend);
+        const bool verbOn = settings.verbMix > 0.001f || anyVerbSend;
         const float fb = std::clamp (settings.echoFb, 0.0f, 0.9f);
         const float dryGain = 1.0f - settings.dryWet;
+        const bool masterEqOn = settings.mEqOn && masterEqL.active;
 
         for (int i = 0; i < todo; ++i)
         {
@@ -145,17 +186,35 @@ void HarmonyEngine::process (const float* in, const MultiOut& out, int n)
             {
                 const float el = echoL[(echoPos - (uint64_t) echoSamps) & kEchoMask];
                 const float er = echoR[(echoPos - (uint64_t) echoSamps) & kEchoMask];
-                echoL[echoPos & kEchoMask] = wl + fb * er; // ping-pong cross-feedback
-                echoR[echoPos & kEchoMask] = wr + fb * el;
+                // Echo input: whole wet bus (legacy echoMix path) + per-voice sends.
+                echoL[echoPos & kEchoMask] = wl + sendEL[(size_t) i] + fb * er; // ping-pong
+                echoR[echoPos & kEchoMask] = wr + sendER[(size_t) i] + fb * el;
                 ++echoPos;
-                wl += settings.echoMix * el;
-                wr += settings.echoMix * er;
+                const float ret = std::max (settings.echoMix, anyEchoSend ? 0.85f : 0.0f);
+                wl += ret * el;
+                wr += ret * er;
+            }
+
+            if (verbOn)
+            {
+                float rl, rr;
+                verb.process (sendV[(size_t) i] + (wl + wr) * 0.5f * settings.verbMix, rl, rr);
+                wl += rl;
+                wr += rr;
             }
 
             const float lead = leadTmp[(size_t) i];
             L[i] = dryGain * lead + settings.dryWet * wl;
             R[i] = dryGain * lead + settings.dryWet * wr;
+            if (masterEqOn)
+            {
+                L[i] = masterEqL.process (L[i]);
+                R[i] = masterEqR.process (R[i]);
+            }
+            scopeRing[kNumVoices][(scopeWrite.load (std::memory_order_relaxed) + (uint32_t) i)
+                                  & (kScopeSize - 1)] = (L[i] + R[i]) * 0.5f;
         }
+        scopeWrite.fetch_add ((uint32_t) todo, std::memory_order_relaxed);
 
         done += todo;
         hopRemaining -= todo;
@@ -209,6 +268,17 @@ void HarmonyEngine::runAnalysis()
     }
     leadShifter.setPeriod (lastEst.voiced ? (float) (sr / lastEst.f0) : 0.0f, lastEst.voiced);
     leadShifter.setRatio (corrRatio);
+
+    // Channel-strip coefficients follow the settings at hop rate (cheap, and
+    // avoids threading games with the UI).
+    for (int vi = 0; vi < kNumVoices; ++vi)
+    {
+        const auto& vs = settings.voices[vi];
+        voices[vi].eq.set ((float) sr, vs.eqF, vs.eqG);
+    }
+    masterEqL.set ((float) sr, settings.mEqF, settings.mEqG);
+    masterEqR.set ((float) sr, settings.mEqF, settings.mEqG);
+    verb.setSize (settings.verbSize);
 
     int held[16], numHeld = 0;
     for (int note = 0; note < 128 && numHeld < 16; ++note)

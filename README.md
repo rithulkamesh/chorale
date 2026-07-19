@@ -37,9 +37,6 @@ macOS may block them. Right-click the plugin or app → **Open**, or allow in
 **System Settings → Privacy & Security**. No Apple Developer account needed on
 your end.
 
-Future CREPE/ONNX pitch models ship **inside the release zip**, same as the
-plugins. Users never fetch weights separately.
-
 ## Under the hood
 
 ```mermaid
@@ -81,15 +78,40 @@ snap to scale).
 **Humanize** adds slow, independent pitch drift and level flutter so the stack
 reads as people, not a rack unit.
 
-**Wet bus:** tone (low-pass), stereo width, ping-pong echo with feedback.
+**Wet bus:** tone (low-pass), stereo width, ping-pong echo with feedback, and a
+shared reverb bus.
+
+**FX view:** each voice has a visible **chain** — `EQ → COMP → ECHO → VERB` —
+shown as module cards. Click a card to edit it; click its power dot to bypass
+it (EQ and compressor are opt-in and cost nothing while off). The EQ module is
+a graphical **8-band EQ** (low shelf + six full-range peaks + high shelf; drag
+nodes, double-click resets a band) drawn over a **live spectrum** of that
+voice; COMP is threshold/ratio with auto makeup; ECHO/VERB are sends into the
+shared echo and reverb buses. The master chain is `EQ → REVERB` on the main
+mix. Mute/solo live in every view.
 
 **Key:** auto-detect (Krumhansl-Schmuckler) or set root + mode yourself (major,
 minor, church modes, chromatic). **33 presets** across duets, stacks, choirs,
 octaves, doublers, pedals, MIDI, experimental. Apply one, then tear it apart.
 Presets never touch your mix.
 
-**Latency:** 2048 samples (~46 ms @ 44.1 kHz), reported to the host for PDC. AU
-passes `auval`.
+**User presets:** save, overwrite, and delete your own presets from the preset
+menu (stored as plain XML in your user app-data folder). **A/B** buttons in the
+footer swap between two full parameter states; **undo/redo** (⌘Z / ⇧⌘Z, or the
+footer buttons) covers every knob move and preset apply.
+
+**Latency:** two modes, switchable in the footer and reported to the host for
+PDC. **Studio** is 2048 samples (~46 ms @ 44.1 kHz). **Live** halves it to 1024
+(~23 ms) for tracking and performance — very low voices (below ~110 Hz) get
+slightly rougher shifting there. AU passes `auval`.
+
+**UI:** drag the corner to resize (50–200%); the scale is remembered per
+session. IBM Plex Sans/Mono (OFL) is embedded, so the UI renders identically
+everywhere.
+
+**Updates:** on open, Chorale asks GitHub once (in the background) whether a
+newer release exists; if so, a small link appears in the footer. No telemetry,
+nothing sent — a single releases-API read, and it fails silently offline.
 
 ## Multi-output
 

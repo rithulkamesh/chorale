@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(Chorale VERSION 0.2.0 LANGUAGES C CXX)
+project(Chorale VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -33,9 +33,25 @@ set(DSP_SOURCES
     src/dsp/HarmonyEngine.cpp
 )
 
+# IBM Plex (OFL) embedded so the UI renders identically everywhere.
+juce_add_binary_data(ChoraleFonts SOURCES
+    assets/fonts/IBMPlexSans-Regular.ttf
+    assets/fonts/IBMPlexSans-SemiBold.ttf
+    assets/fonts/IBMPlexMono-Regular.ttf
+)
+
 target_sources(Chorale PRIVATE
     src/PluginProcessor.cpp
     src/PluginEditor.cpp
+    src/ui/Theme.cpp
+    src/ui/ChoraleLookAndFeel.cpp
+    src/ui/GainFader.cpp
+    src/ui/NoteChips.cpp
+    src/ui/StageView.cpp
+    src/ui/MixerView.cpp
+    src/ui/VoiceDetailPanel.cpp
+    src/ui/EqPanel.cpp
+    src/ui/FxView.cpp
     ${DSP_SOURCES}
 )
 
@@ -55,6 +71,7 @@ target_include_directories(harmonize PRIVATE src)
 
 target_link_libraries(Chorale
     PRIVATE
+        ChoraleFonts
         juce::juce_audio_utils
         juce::juce_dsp
     PUBLIC

@@ -304,6 +304,76 @@ int main()
         std::puts ("ok: multi-out stems isolated; main bus matches stereo mix");
     }
 
+    // 6f. Per-voice channel FX: mid-band cut at the harmony fundamental drops
+    // level, the compressor changes gain, and a reverb send rings past the
+    // end of the input.
+    {
+        auto tone = synth ({ { 60, 1.0 } });
+        tone.resize (tone.size() + (size_t) (0.5 * kSr), 0.0f); // silence for tails
+        HarmonySettings s;
+        s.dryWet = 1.0f;
+        s.scaleMode = 1;
+        s.voices[0] = { 1, 9, 57, 1.0f, 0.0f, 0.0f }; // 3rd up (E4 ~ 330 Hz)
+
+        auto rms = [] (const std::vector<float>& x, size_t a, size_t b)
+        {
+            double e = 0;
+            for (size_t i = a; i < b; ++i)
+                e += x[i] * x[i];
+            return std::sqrt (e / (double) (b - a));
+        };
+        const size_t n = tone.size();
+        const auto flat = runEngine (tone, s);
+        const double flatBody = rms (flat.l, n / 4, n / 2);
+        const double flatTail = rms (flat.l, n - (size_t) (0.2 * kSr), n);
+
+        auto cutS = s;
+        cutS.voices[0].eqOn = true;
+        cutS.voices[0].eqF[3] = 330.0f; // peak band on the harmony fundamental
+        cutS.voices[0].eqG[3] = -12.0f;
+        const auto cut = runEngine (tone, cutS);
+        CHECK (rms (cut.l, n / 4, n / 2) < flatBody * 0.7);
+
+        auto compS = s;
+        compS.voices[0].compOn = true;
+        compS.voices[0].compThresh = -30.0f;
+        compS.voices[0].compRatio = 8.0f;
+        const auto comp = runEngine (tone, compS);
+        const double dbDelta = 20.0 * std::log10 (rms (comp.l, n / 4, n / 2) / flatBody);
+        CHECK (std::abs (dbDelta) > 1.0); // gain computer clearly engaged
+
+        auto verbS = s;
+        verbS.voices[0].sendVerb = 1.0f;
+        verbS.verbSize = 0.8f;
+        const auto verb = runEngine (tone, verbS);
+        CHECK (rms (verb.l, n - (size_t) (0.2 * kSr), n) > flatTail * 4.0 + 1e-4);
+        std::puts ("ok: per-voice EQ cut, compressor gain, reverb-send tail");
+    }
+
+    // 6g. Master EQ: -12 dB high shelf on the mix darkens the output.
+    {
+        const auto tone = synth ({ { 60, 1.2 } });
+        HarmonySettings s;
+        s.dryWet = 1.0f;
+        s.scaleMode = 1;
+        s.voices[0] = { 1, 9, 57, 1.0f, 0.0f, 0.0f };
+        const auto flat = runEngine (tone, s);
+        auto dark = s;
+        dark.mEqOn = true;
+        dark.mEqG[7] = -12.0f; // high shelf
+        dark.mEqF[7] = 2000.0f;
+        const auto out = runEngine (tone, dark);
+        auto hf = [] (const std::vector<float>& x)
+        {
+            double e = 0;
+            for (size_t i = 1; i < x.size(); ++i)
+                e += (x[i] - x[i - 1]) * (x[i] - x[i - 1]);
+            return e;
+        };
+        CHECK (hf (out.l) < hf (flat.l) * 0.7);
+        std::puts ("ok: master EQ high-shelf cut darkens the mix");
+    }
+
     // 7. Demo renders (listen: tests_out/*.wav).
     {
         const std::vector<std::pair<double, double>> melody = {

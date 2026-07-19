@@ -21,8 +21,12 @@ void PsolaShifter::prepare (double)
 void PsolaShifter::setPeriod (float p, bool isVoiced)
 {
     voiced = isVoiced;
+    // Upper clamp keeps grain reads behind the write head: a grain needs
+    // ~2.5 periods of lookbehind. At kLatency that's the old 800-sample cap;
+    // ponytail: in live mode very low voices (<~110 Hz) get a clamped grain
+    // grid — rougher, but stable. Snap-to-epoch marks is the quality upgrade.
     if (isVoiced)
-        period = std::clamp (p, 40.0f, 800.0f);
+        period = std::clamp (p, 40.0f, std::min (800.0f, 0.38f * (float) latency));
 }
 
 void PsolaShifter::setRatio (float r)
@@ -59,7 +63,7 @@ void PsolaShifter::placeGrain (double c)
 {
     // Advance the analysis-mark grid (marks spaced one period apart in input
     // time) until it sits nearest the input time corresponding to c.
-    while (markGrid < c - kLatency - period * 0.5)
+    while (markGrid < c - latency - period * 0.5)
         markGrid += period;
 
     const int64_t m = (int64_t) std::llround (markGrid);
