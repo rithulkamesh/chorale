@@ -39,10 +39,43 @@ No compiler required. Unzip, copy the plugins in, rescan your DAW.
 | Windows | `Chorale-Windows.zip` | `.vst3` → `C:\Program Files\Common Files\VST3` |
 | Linux | `Chorale-Linux.zip` | `.vst3` → `~/.vst3` |
 
-macOS builds are universal (Apple Silicon + Intel) and **unsigned**. On first open,
-macOS may block them. Right-click the plugin or app → **Open**, or allow in
-**System Settings → Privacy & Security**. No Apple Developer account needed on
-your end.
+### macOS warning (please read)
+
+Release zips are **universal** (Apple Silicon + Intel) and **unsigned / not
+notarized**. There is no paid Apple Developer Program membership on this
+project, so Gatekeeper will treat a fresh download as untrusted. That is an
+Apple policy / cost constraint — not malware, and nothing phone-home is
+involved.
+
+**Recommended:** run the installer. It is plain bash in this repo
+([`scripts/install.sh`](scripts/install.sh)) — open it and read it before
+piping if you want.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/rithulkamesh/chorale/master/scripts/install.sh | bash
+```
+
+Exactly what that script does, in order:
+
+1. Hits the GitHub Releases API for the latest `v*` tag
+2. Downloads `Chorale-macOS.zip` from `github.com/rithulkamesh/chorale`
+3. Unzips into a temp directory
+4. Clears the `com.apple.quarantine` xattr (so Gatekeeper stops blocking the
+   bundles you just downloaded)
+5. Ad-hoc codesigns with `codesign --force --deep -s -` (local signature only —
+   **not** a Developer ID, **not** notarized, no Apple account used)
+6. Copies into user-writable paths only (no `sudo`):
+   - `~/Library/Audio/Plug-Ins/Components/Chorale.component`
+   - `~/Library/Audio/Plug-Ins/VST3/Chorale.vst3`
+   - `~/Applications/Chorale.app`
+7. Deletes the temp directory on exit
+
+It does **not** send telemetry, open a network connection except to GitHub, write
+outside those three destinations, or request admin rights.
+
+**Manual fallback:** download the zip yourself, then Right-click → **Open** on
+each bundle (or allow under **System Settings → Privacy & Security**). Same
+unsigned binaries; more clicking.
 
 ## Under the hood
 
