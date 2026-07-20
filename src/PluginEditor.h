@@ -57,7 +57,8 @@ private:
     juce::TextButton presetBtn { "Presets..." };
     juce::ComboBox keyRoot, scale, correct, latMode;
     juce::Slider mix, humanize, tone, width;
-    juce::Label keyLbl, scaleLbl, correctLbl, mixLbl, autoKeyLbl, pitchLbl, latencyLbl;
+    juce::Label keyLbl, scaleLbl, correctLbl, mixLbl, autoKeyLbl, pitchLbl, latencyLbl,
+        versionLbl;
     juce::Label fxLbls[3];
     juce::TextButton stageBtn { "STAGE" }, mixerBtn { "MIXER" }, fxBtn { "FX" };
     juce::TextButton undoBtn, redoBtn, aBtn { "A" }, bBtn { "B" };

@@ -88,6 +88,12 @@ ChoraleEditor::ChoraleEditor (ChoraleProcessor& p)
     latencyLbl.setJustificationType (Justification::centredRight);
     content.addAndMakeVisible (latencyLbl);
 
+    versionLbl.setText ("v" JucePlugin_VersionString, dontSendNotification);
+    versionLbl.setFont (ui::mono (10.0f));
+    versionLbl.setColour (Label::textColourId, Colour (0xff55595f));
+    versionLbl.setJustificationType (Justification::centredRight);
+    content.addAndMakeVisible (versionLbl);
+
     content.addAndMakeVisible (chips);
     content.addAndMakeVisible (stage);
     content.addAndMakeVisible (mixer);
@@ -574,6 +580,8 @@ void ChoraleEditor::layoutContent()
     bBtn.setBounds (footer.removeFromLeft (24));
     footer.removeFromLeft (12);
     midiAdaptBtn.setBounds (footer.removeFromLeft (86));
+    versionLbl.setBounds (footer.removeFromRight (52));
+    footer.removeFromRight (8);
     latencyLbl.setBounds (footer.removeFromRight (120));
     footer.removeFromRight (6);
     latMode.setBounds (footer.removeFromRight (84).withSizeKeepingCentre (84, 22));
