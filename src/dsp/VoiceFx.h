@@ -155,6 +155,24 @@ struct Compressor
     }
 };
 
+// Stateless tanh waveshaper with rough level compensation and dry/wet.
+// ponytail: sqrt(g) compensation is a compromise — small signals gain up to
+// +12 dB at full drive, peaks land ~-12 dB; oversampling is the upgrade if
+// aliasing shows on bright material.
+struct Saturator
+{
+    static inline float shape (float x, float drive) // drive 0..1
+    {
+        const float g = std::exp2 (drive * 4.0f); // 1..16
+        return std::tanh (g * x) / std::sqrt (g);
+    }
+
+    static inline float process (float x, float drive, float mix)
+    {
+        return x + (shape (x, drive) - x) * mix;
+    }
+};
+
 // Freeverb-style reverb: 8 combs + 4 allpasses per channel, mono in,
 // stereo out. ponytail: classic tuning, no modulation — an FDN with
 // modulated delays is the upgrade if metallic ringing shows up.

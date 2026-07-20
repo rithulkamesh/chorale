@@ -25,7 +25,7 @@ void ChainStrip::setSelected (int index)
 Rectangle<float> ChainStrip::cardRect (int index) const
 {
     const int n = jmax (1, modules.size());
-    constexpr float arrowW = 16.0f;
+    constexpr float arrowW = 14.0f;
     const float cardW = ((float) getWidth() - arrowW * (float) (n - 1)) / (float) n;
     return { (float) index * (cardW + arrowW), 2.0f, cardW, (float) getHeight() - 4.0f };
 }
@@ -50,7 +50,6 @@ void ChainStrip::paint (Graphics& g)
         g.setColour (i == selected ? ui::kText : Colour (0xff2c2f34));
         g.drawRoundedRectangle (r.reduced (0.5f), 8.0f, i == selected ? 1.2f : 1.0f);
 
-        // Power dot (only for toggleable modules).
         float textX = r.getX() + 8.0f;
         if (modules[i].onParamId.isNotEmpty())
         {
@@ -76,7 +75,7 @@ void ChainStrip::paint (Graphics& g)
             g.setColour (ui::kDim.withAlpha (0.5f));
             g.setFont (ui::sans (11.0f));
             g.drawText (String::charToString (0x2192),
-                        Rectangle<float> (r.getRight(), r.getY(), 16.0f, r.getHeight()),
+                        Rectangle<float> (r.getRight(), r.getY(), 14.0f, r.getHeight()),
                         Justification::centred);
         }
     }
@@ -89,7 +88,6 @@ void ChainStrip::mouseDown (const MouseEvent& e)
         const auto r = cardRect (i);
         if (! r.contains (e.position))
             continue;
-        // Left sliver with the dot = power toggle; anywhere else = select.
         if (modules[i].onParamId.isNotEmpty() && e.position.x < r.getX() + 22.0f)
         {
             if (auto* p = proc.apvts.getParameter (modules[i].onParamId))
@@ -109,21 +107,32 @@ void ChainStrip::mouseDown (const MouseEvent& e)
 //==============================================================================
 FxView::FxView (ChoraleProcessor& p)
     : proc (p),
-      voiceChain (p, [this] (int m) { showVoiceModule (m); }),
+      canvas (p, [this] (int n)
+              {
+                  selectNode (n);
+                  // Canvas-initiated voice clicks drive app-wide selection;
+                  // fired here (not in selectNode) to avoid feedback loops.
+                  if (graph::kindOf (n) == graph::NodeKind::Voice && onVoicePicked != nullptr)
+                      onVoicePicked (n % 8);
+              }),
       masterChain (p, [this] (int m) { showMasterModule (m); }),
-      voiceEq (p, ui::voiceInk (0)),
+      eqPanel (p, ui::voiceInk (0)),
+      compPanel (p, ui::voiceInk (0)),
+      satPanel (p, ui::voiceInk (0)),
+      echoPanel (p, ui::voiceInk (0)),
+      verbPanel (p, ui::voiceInk (0)),
       masterEq (p, ui::kText),
-      voiceComp (p, ui::voiceInk (0)),
-      masterComp (p, ui::kText)
+      masterComp (p, ui::kText),
+      masterSat (p, ui::kText)
 {
-    voiceTitle.setFont (ui::sans (13.0f, true));
+    nodeTitle.setFont (ui::sans (13.0f, true));
     masterTitle.setFont (ui::sans (13.0f, true));
     masterTitle.setText ("MASTER", dontSendNotification);
     masterTitle.setColour (Label::textColourId, ui::kText);
-    addAndMakeVisible (voiceTitle);
+    addAndMakeVisible (nodeTitle);
     addAndMakeVisible (masterTitle);
 
-    for (auto* h : { &voiceHint, &masterHint })
+    for (auto* h : { &nodeHint, &masterHint })
     {
         h->setFont (ui::sans (9.5f));
         h->setColour (Label::textColourId, ui::kDim.withAlpha (0.7f));
@@ -131,40 +140,45 @@ FxView::FxView (ChoraleProcessor& p)
         addAndMakeVisible (*h);
     }
 
-    addAndMakeVisible (voiceChain);
+    addAndMakeVisible (canvas);
     addAndMakeVisible (masterChain);
     {
         Array<ChainStrip::Module> mods;
         mods.add ({ "EQ", "mEqOn" });
         mods.add ({ "COMP", "mCompOn" });
-        mods.add ({ "REVERB", "" });
+        mods.add ({ "SAT", "mSatOn" });
         masterChain.setModules (std::move (mods));
     }
 
-    addChildComponent (voiceEq);
-    addChildComponent (masterEq);
-    addChildComponent (voiceComp);
-    addChildComponent (masterComp);
+    for (auto* c : std::initializer_list<Component*> { &eqPanel, &compPanel, &satPanel,
+                                                       &echoPanel, &verbPanel, &masterEq,
+                                                       &masterComp, &masterSat })
+        addChildComponent (*c);
     masterEq.setTarget ("mEq", ChoraleProcessor::kNumVoices, ui::kText);
     masterComp.setTarget ("mComp", ChoraleProcessor::kNumVoices, ui::kText);
+    masterSat.setTarget ("mSat", ChoraleProcessor::kNumVoices, ui::kText);
 
     initKnob (compT, compTLbl, "THRESH");
     initKnob (compR, compRLbl, "RATIO");
-    initKnob (sendEcho, sendEchoLbl, "ECHO SEND");
-    initKnob (sendVerb, sendVerbLbl, "VERB SEND");
+    initKnob (satDrive, satDriveLbl, "DRIVE");
+    initKnob (satMix, satMixLbl, "MIX");
+    initKnob (gainKnob, gainLbl, "GAIN");
+    initKnob (echoTime, echoTimeLbl, "TIME");
+    initKnob (echoFb, echoFbLbl, "FEEDBACK");
+    initKnob (echoMix, echoMixLbl, "MIX");
     initKnob (verbSize, verbSizeLbl, "SIZE");
     initKnob (verbMix, verbMixLbl, "MIX");
     initKnob (mCompT, mCompTLbl, "THRESH");
     initKnob (mCompR, mCompRLbl, "RATIO");
+    initKnob (mSatDrive, mSatDriveLbl, "DRIVE");
+    initKnob (mSatMix, mSatMixLbl, "MIX");
+
     mCompTAtt = std::make_unique<SliderAtt> (proc.apvts, "mCompT", mCompT);
     mCompRAtt = std::make_unique<SliderAtt> (proc.apvts, "mCompR", mCompR);
-    mCompT.setColour (Slider::rotarySliderFillColourId, ui::kAccent);
-    mCompR.setColour (Slider::rotarySliderFillColourId, ui::kAccent);
-
-    verbSizeAtt = std::make_unique<SliderAtt> (proc.apvts, "verbSize", verbSize);
-    verbMixAtt = std::make_unique<SliderAtt> (proc.apvts, "verbMix", verbMix);
-    verbSize.setColour (Slider::rotarySliderFillColourId, ui::kAccent);
-    verbMix.setColour (Slider::rotarySliderFillColourId, ui::kAccent);
+    mSatDriveAtt = std::make_unique<SliderAtt> (proc.apvts, "mSatDrive", mSatDrive);
+    mSatMixAtt = std::make_unique<SliderAtt> (proc.apvts, "mSatMix", mSatMix);
+    for (auto* s : { &mCompT, &mCompR, &mSatDrive, &mSatMix })
+        s->setColour (Slider::rotarySliderFillColourId, ui::kAccent);
 
     for (auto* b : { &solo, &mute })
     {
@@ -172,8 +186,7 @@ FxView::FxView (ChoraleProcessor& p)
         addAndMakeVisible (*b);
     }
 
-    setVoice (0);
-    showVoiceModule (0);
+    selectNode (graph::kVoice0);
     showMasterModule (0);
     startTimerHz (10);
 }
@@ -192,60 +205,142 @@ void FxView::initKnob (Slider& s, Label& l, const char* text)
 
 void FxView::setVoice (int v)
 {
-    voice = jlimit (0, ChoraleProcessor::kNumVoices - 1, v);
-    const auto id = String (voice + 1);
-    const auto accent = ui::voiceInk (voice);
-
-    voiceTitle.setText ("VOICE " + id + "  CHAIN", dontSendNotification);
-    voiceTitle.setColour (Label::textColourId, accent);
-    voiceEq.setTarget ("v" + id + "Eq", voice, accent);
-    voiceComp.setTarget ("v" + id + "Comp", voice, accent);
-    {
-        Array<ChainStrip::Module> mods;
-        mods.add ({ "EQ", "v" + id + "EqOn" });
-        mods.add ({ "COMP", "v" + id + "CompOn" });
-        mods.add ({ "ECHO", "" });
-        mods.add ({ "VERB", "" });
-        voiceChain.setModules (std::move (mods));
-    }
-
-    solo.setColour (TextButton::buttonOnColourId, ui::kText);
-    mute.setColour (TextButton::buttonOnColourId, accent);
-
-    compTAtt.reset();
-    compRAtt.reset();
-    sendEchoAtt.reset();
-    sendVerbAtt.reset();
-    soloAtt.reset();
-    muteAtt.reset();
-    compTAtt = std::make_unique<SliderAtt> (proc.apvts, "v" + id + "CompT", compT);
-    compRAtt = std::make_unique<SliderAtt> (proc.apvts, "v" + id + "CompR", compR);
-    sendEchoAtt = std::make_unique<SliderAtt> (proc.apvts, "v" + id + "SendEcho", sendEcho);
-    sendVerbAtt = std::make_unique<SliderAtt> (proc.apvts, "v" + id + "SendVerb", sendVerb);
-    soloAtt = std::make_unique<ButtonAtt> (proc.apvts, "v" + id + "Solo", solo);
-    muteAtt = std::make_unique<ButtonAtt> (proc.apvts, "v" + id + "Mute", mute);
-    for (auto* s : { &compT, &compR, &sendEcho, &sendVerb })
-        s->setColour (Slider::rotarySliderFillColourId, accent);
-    repaint();
+    selectNode (graph::kVoice0 + jlimit (0, ChoraleProcessor::kNumVoices - 1, v));
+    canvas.setSelected (selectedNode);
 }
 
-void FxView::showVoiceModule (int m)
+void FxView::selectNode (int nodeId)
 {
-    voiceChain.setSelected (m);
-    voiceEq.setVisible (m == 0);
-    voiceComp.setVisible (m == 1);
-    compT.setVisible (m == 1);
-    compTLbl.setVisible (m == 1);
-    compR.setVisible (m == 1);
-    compRLbl.setVisible (m == 1);
-    sendEcho.setVisible (m == 2);
-    sendEchoLbl.setVisible (m == 2);
-    sendVerb.setVisible (m == 3);
-    sendVerbLbl.setVisible (m == 3);
-    voiceHint.setText (m == 2 ? "Feeds the global echo (time/feedback in the bar below)"
-                              : (m == 3 ? "Feeds the shared reverb (size/mix under MASTER)" : ""),
-                       dontSendNotification);
+    using namespace graph;
+    selectedNode = nodeId;
+    const int slot = nodeId % 8;
+    const auto vId = String (slot + 1);
+    const auto accent = ui::voiceInk (slot);
+    const auto kind = kindOf (nodeId);
+
+    // Visibility.
+    const bool isVoice = kind == NodeKind::Voice;
+    eqPanel.setVisible (kind == NodeKind::Eq);
+    compPanel.setVisible (kind == NodeKind::Comp);
+    compT.setVisible (kind == NodeKind::Comp);
+    compTLbl.setVisible (kind == NodeKind::Comp);
+    compR.setVisible (kind == NodeKind::Comp);
+    compRLbl.setVisible (kind == NodeKind::Comp);
+    satPanel.setVisible (kind == NodeKind::Sat);
+    satDrive.setVisible (kind == NodeKind::Sat);
+    satDriveLbl.setVisible (kind == NodeKind::Sat);
+    satMix.setVisible (kind == NodeKind::Sat);
+    satMixLbl.setVisible (kind == NodeKind::Sat);
+    echoPanel.setVisible (kind == NodeKind::Echo);
+    echoTime.setVisible (kind == NodeKind::Echo);
+    echoTimeLbl.setVisible (kind == NodeKind::Echo);
+    echoFb.setVisible (kind == NodeKind::Echo);
+    echoFbLbl.setVisible (kind == NodeKind::Echo);
+    echoMix.setVisible (kind == NodeKind::Echo);
+    echoMixLbl.setVisible (kind == NodeKind::Echo);
+    verbPanel.setVisible (kind == NodeKind::Verb);
+    verbSize.setVisible (kind == NodeKind::Verb);
+    verbSizeLbl.setVisible (kind == NodeKind::Verb);
+    verbMix.setVisible (kind == NodeKind::Verb);
+    verbMixLbl.setVisible (kind == NodeKind::Verb);
+    solo.setVisible (isVoice);
+    mute.setVisible (isVoice);
+    gainKnob.setVisible (kind == NodeKind::Gain);
+    gainLbl.setVisible (kind == NodeKind::Gain);
+
+    // Bindings + titles.
+    compTAtt.reset();
+    compRAtt.reset();
+    satDriveAtt.reset();
+    satMixAtt.reset();
+    echoTimeAtt.reset();
+    echoFbAtt.reset();
+    echoMixAtt.reset();
+    verbSizeAtt.reset();
+    verbMixAtt.reset();
+    gainAtt.reset();
+    soloAtt.reset();
+    muteAtt.reset();
+
+    switch (kind)
+    {
+        case NodeKind::Voice:
+            nodeTitle.setText ("VOICE " + vId, dontSendNotification);
+            soloAtt = std::make_unique<ButtonAtt> (proc.apvts, "v" + vId + "Solo", solo);
+            muteAtt = std::make_unique<ButtonAtt> (proc.apvts, "v" + vId + "Mute", mute);
+            nodeHint.setText ("Wire this voice through nodes into OUT; drag its out port to patch",
+                              dontSendNotification);
+            break;
+        case NodeKind::Eq:
+            nodeTitle.setText ("EQ " + vId, dontSendNotification);
+            eqPanel.setTarget ("v" + vId + "Eq", slot, accent);
+            nodeHint.setText ("", dontSendNotification);
+            break;
+        case NodeKind::Comp:
+            nodeTitle.setText ("COMP " + vId, dontSendNotification);
+            compPanel.setTarget ("v" + vId + "Comp", slot, accent);
+            compTAtt = std::make_unique<SliderAtt> (proc.apvts, "v" + vId + "CompT", compT);
+            compRAtt = std::make_unique<SliderAtt> (proc.apvts, "v" + vId + "CompR", compR);
+            nodeHint.setText ("", dontSendNotification);
+            break;
+        case NodeKind::Sat:
+            nodeTitle.setText ("SAT " + vId, dontSendNotification);
+            satPanel.setTarget ("v" + vId + "Sat", slot, accent);
+            satDriveAtt = std::make_unique<SliderAtt> (proc.apvts, "v" + vId + "SatDrive", satDrive);
+            satMixAtt = std::make_unique<SliderAtt> (proc.apvts, "v" + vId + "SatMix", satMix);
+            nodeHint.setText ("", dontSendNotification);
+            break;
+        case NodeKind::Gain:
+        {
+            const auto g = String (nodeId - kGain0 + 1);
+            nodeTitle.setText ("GAIN " + g, dontSendNotification);
+            gainAtt = std::make_unique<SliderAtt> (proc.apvts, "gain" + g + "Level", gainKnob);
+            nodeHint.setText ("Leveled summer: wire several nodes in, one out", dontSendNotification);
+            break;
+        }
+        case NodeKind::Echo:
+        {
+            const auto e = String (nodeId - kEcho0 + 1);
+            nodeTitle.setText ("ECHO " + e, dontSendNotification);
+            echoTimeAtt = std::make_unique<SliderAtt> (proc.apvts, "echo" + e + "Time", echoTime);
+            echoFbAtt = std::make_unique<SliderAtt> (proc.apvts, "echo" + e + "Fb", echoFb);
+            echoMixAtt = std::make_unique<SliderAtt> (proc.apvts, "echo" + e + "Mix", echoMix);
+            echoPanel.setTarget ("echo" + e, ui::kAccent);
+            nodeHint.setText ("Ping-pong delay: dry passes at unity, MIX sets the tail",
+                              dontSendNotification);
+            break;
+        }
+        case NodeKind::Verb:
+        {
+            const auto e = String (nodeId - kVerb0 + 1);
+            nodeTitle.setText ("REVERB " + e, dontSendNotification);
+            verbSizeAtt = std::make_unique<SliderAtt> (proc.apvts, "verb" + e + "Size", verbSize);
+            verbMixAtt = std::make_unique<SliderAtt> (proc.apvts, "verb" + e + "Mix", verbMix);
+            verbPanel.setTarget ("verb" + e, ui::kAccent);
+            nodeHint.setText ("Reverb: dry passes at unity, MIX sets the tail",
+                              dontSendNotification);
+            break;
+        }
+        case NodeKind::Out:
+            nodeTitle.setText ("OUT", dontSendNotification);
+            nodeHint.setText ("Wet bus: tone / width in the bar, then mixed with the lead",
+                              dontSendNotification);
+            break;
+    }
+    nodeTitle.setColour (Label::textColourId,
+                         kind == NodeKind::Voice || kind == NodeKind::Eq
+                                 || kind == NodeKind::Comp || kind == NodeKind::Sat
+                             ? accent
+                             : ui::kText);
+    for (auto* s : { &compT, &compR, &satDrive, &satMix })
+        s->setColour (Slider::rotarySliderFillColourId, accent);
+    for (auto* s : { &echoTime, &echoFb, &echoMix, &verbSize, &verbMix, &gainKnob })
+        s->setColour (Slider::rotarySliderFillColourId, ui::kAccent);
+    solo.setColour (TextButton::buttonOnColourId, ui::kText);
+    mute.setColour (TextButton::buttonOnColourId, accent);
+    canvas.setSelected (nodeId);
     resized();
+    repaint();
 }
 
 void FxView::showMasterModule (int m)
@@ -257,31 +352,34 @@ void FxView::showMasterModule (int m)
     mCompTLbl.setVisible (m == 1);
     mCompR.setVisible (m == 1);
     mCompRLbl.setVisible (m == 1);
-    verbSize.setVisible (m == 2);
-    verbSizeLbl.setVisible (m == 2);
-    verbMix.setVisible (m == 2);
-    verbMixLbl.setVisible (m == 2);
-    masterHint.setText (m == 2 ? "Shared bus: voices feed it via VERB sends" : "",
-                        dontSendNotification);
+    masterSat.setVisible (m == 2);
+    mSatDrive.setVisible (m == 2);
+    mSatDriveLbl.setVisible (m == 2);
+    mSatMix.setVisible (m == 2);
+    mSatMixLbl.setVisible (m == 2);
+    masterHint.setText ("", dontSendNotification);
     resized();
 }
 
 void FxView::timerCallback()
 {
-    // Editors dim when their module is bypassed.
-    const auto id = String (voice + 1);
-    const bool eqOn = proc.apvts.getRawParameterValue ("v" + id + "EqOn")->load() > 0.5f;
-    const bool compOn = proc.apvts.getRawParameterValue ("v" + id + "CompOn")->load() > 0.5f;
-    const bool mEqOn = proc.apvts.getRawParameterValue ("mEqOn")->load() > 0.5f;
-    const bool mCompOn = proc.apvts.getRawParameterValue ("mCompOn")->load() > 0.5f;
-    voiceEq.setAlpha (eqOn ? 1.0f : 0.45f);
-    masterEq.setAlpha (mEqOn ? 1.0f : 0.45f);
-    for (auto* c : { (Component*) &voiceComp, (Component*) &compT, (Component*) &compR,
-                     (Component*) &compTLbl, (Component*) &compRLbl })
-        c->setAlpha (compOn ? 1.0f : 0.45f);
-    for (auto* c : { (Component*) &masterComp, (Component*) &mCompT, (Component*) &mCompR,
-                     (Component*) &mCompTLbl, (Component*) &mCompRLbl })
-        c->setAlpha (mCompOn ? 1.0f : 0.45f);
+    // Dim editors whose module is bypassed.
+    const auto vId = String (selectedNode % 8 + 1);
+    auto dim = [this] (const String& onParam, std::initializer_list<Component*> comps)
+    {
+        if (auto* raw = proc.apvts.getRawParameterValue (onParam))
+        {
+            const bool on = raw->load() > 0.5f;
+            for (auto* c : comps)
+                c->setAlpha (on ? 1.0f : 0.45f);
+        }
+    };
+    dim ("v" + vId + "EqOn", { &eqPanel });
+    dim ("v" + vId + "CompOn", { &compPanel, &compT, &compR, &compTLbl, &compRLbl });
+    dim ("v" + vId + "SatOn", { &satPanel, &satDrive, &satMix, &satDriveLbl, &satMixLbl });
+    dim ("mEqOn", { &masterEq });
+    dim ("mCompOn", { &masterComp, &mCompT, &mCompR, &mCompTLbl, &mCompRLbl });
+    dim ("mSatOn", { &masterSat, &mSatDrive, &mSatMix, &mSatDriveLbl, &mSatMixLbl });
 }
 
 void FxView::paint (Graphics& g)
@@ -290,73 +388,74 @@ void FxView::paint (Graphics& g)
     g.fillRoundedRectangle (getLocalBounds().toFloat(), 10.0f);
     g.setColour (ui::kBorder);
     g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), 10.0f, 1.0f);
-    g.setColour (ui::kVoice[voice]);
-    g.fillRoundedRectangle (Rectangle<float> (12.0f, 0.0f, (float) getWidth() * 0.62f - 24.0f, 2.0f), 1.0f);
 }
 
 void FxView::resized()
 {
-    auto r = getLocalBounds().reduced (12, 10);
+    auto r = getLocalBounds().reduced (12, 8);
+
+    canvas.setBounds (r.removeFromTop ((int) ((float) getHeight() * 0.52f)));
+    r.removeFromTop (6);
 
     auto left = r.removeFromLeft ((int) ((float) getWidth() * 0.62f) - 18);
     r.removeFromLeft (12);
     auto right = r;
 
-    // --- Voice side --------------------------------------------------------
-    auto titleRow = left.removeFromTop (22);
+    // --- Selected node editor ---------------------------------------------
+    auto titleRow = left.removeFromTop (20);
     solo.setBounds (titleRow.removeFromRight (24));
     titleRow.removeFromRight (4);
     mute.setBounds (titleRow.removeFromRight (24));
-    voiceTitle.setBounds (titleRow);
-    left.removeFromTop (6);
-    voiceChain.setBounds (left.removeFromTop (34));
-    left.removeFromTop (6);
-    voiceHint.setBounds (left.removeFromBottom (14));
+    nodeTitle.setBounds (titleRow);
+    left.removeFromTop (4);
+    nodeHint.setBounds (left.removeFromBottom (13));
 
-    voiceEq.setBounds (left.reduced (0, 2));
-    // COMP module: graph + knob column.
+    const auto area = left.reduced (0, 1);
+    auto panelWithKnobs = [] (Rectangle<int> a, Component& panel,
+                              Slider& k1, Label& l1, Slider& k2, Label& l2)
     {
-        auto area = left.reduced (0, 2);
-        auto knobCol = area.removeFromRight (96);
-        voiceComp.setBounds (area);
-        compT.setBounds (Rectangle<int> (56, 56).withCentre ({ knobCol.getCentreX(), knobCol.getCentreY() - 44 }));
-        compTLbl.setBounds (Rectangle<int> (90, 13).withCentre ({ knobCol.getCentreX(), knobCol.getCentreY() - 10 }));
-        compR.setBounds (Rectangle<int> (56, 56).withCentre ({ knobCol.getCentreX(), knobCol.getCentreY() + 34 }));
-        compRLbl.setBounds (Rectangle<int> (90, 13).withCentre ({ knobCol.getCentreX(), knobCol.getCentreY() + 68 }));
-    }
-    // Send modules: single centred knob.
+        auto knobCol = a.removeFromRight (92);
+        panel.setBounds (a);
+        k1.setBounds (Rectangle<int> (48, 48).withCentre ({ knobCol.getCentreX(), knobCol.getCentreY() - 34 }));
+        l1.setBounds (Rectangle<int> (88, 12).withCentre ({ knobCol.getCentreX(), knobCol.getCentreY() - 6 }));
+        k2.setBounds (Rectangle<int> (48, 48).withCentre ({ knobCol.getCentreX(), knobCol.getCentreY() + 28 }));
+        l2.setBounds (Rectangle<int> (88, 12).withCentre ({ knobCol.getCentreX(), knobCol.getCentreY() + 56 }));
+    };
+
+    eqPanel.setBounds (area);
+    panelWithKnobs (area, compPanel, compT, compTLbl, compR, compRLbl);
+    panelWithKnobs (area, satPanel, satDrive, satDriveLbl, satMix, satMixLbl);
+    // ECHO node: taps sketch + TIME/FEEDBACK column + MIX column.
     {
-        auto area = left;
-        const int mid = area.getCentreX();
-        sendEcho.setBounds (Rectangle<int> (64, 64).withCentre ({ mid, area.getCentreY() - 8 }));
-        sendEchoLbl.setBounds (Rectangle<int> (100, 14).withCentre ({ mid, area.getCentreY() + 34 }));
-        sendVerb.setBounds (Rectangle<int> (64, 64).withCentre ({ mid, area.getCentreY() - 8 }));
-        sendVerbLbl.setBounds (Rectangle<int> (100, 14).withCentre ({ mid, area.getCentreY() + 34 }));
+        auto a = area;
+        auto mixCol = a.removeFromRight (76);
+        echoMix.setBounds (Rectangle<int> (48, 48).withCentre ({ mixCol.getCentreX(), mixCol.getCentreY() - 12 }));
+        echoMixLbl.setBounds (Rectangle<int> (62, 12).withCentre ({ mixCol.getCentreX(), mixCol.getCentreY() + 18 }));
+        panelWithKnobs (a, echoPanel, echoTime, echoTimeLbl, echoFb, echoFbLbl);
     }
+    panelWithKnobs (area, verbPanel, verbSize, verbSizeLbl, verbMix, verbMixLbl);
+    gainKnob.setBounds (Rectangle<int> (60, 60).withCentre ({ area.getCentreX(), area.getCentreY() - 8 }));
+    gainLbl.setBounds (Rectangle<int> (90, 13).withCentre ({ area.getCentreX(), area.getCentreY() + 30 }));
 
     // --- Master side -------------------------------------------------------
-    masterTitle.setBounds (right.removeFromTop (22));
-    right.removeFromTop (6);
-    masterChain.setBounds (right.removeFromTop (34));
-    right.removeFromTop (6);
-    masterHint.setBounds (right.removeFromBottom (14));
+    masterTitle.setBounds (right.removeFromTop (20));
+    right.removeFromTop (4);
+    masterChain.setBounds (right.removeFromTop (28));
+    right.removeFromTop (4);
+    masterHint.setBounds (right.removeFromBottom (13));
 
-    masterEq.setBounds (right.reduced (0, 2));
+    const auto mArea = right.reduced (0, 1);
+    auto panelWithKnobsM = [] (Rectangle<int> a, Component& panel,
+                               Slider& k1, Label& l1, Slider& k2, Label& l2)
     {
-        auto area = right.reduced (0, 2);
-        auto knobCol = area.removeFromRight (88);
-        masterComp.setBounds (area);
-        mCompT.setBounds (Rectangle<int> (52, 52).withCentre ({ knobCol.getCentreX(), knobCol.getCentreY() - 42 }));
-        mCompTLbl.setBounds (Rectangle<int> (84, 13).withCentre ({ knobCol.getCentreX(), knobCol.getCentreY() - 10 }));
-        mCompR.setBounds (Rectangle<int> (52, 52).withCentre ({ knobCol.getCentreX(), knobCol.getCentreY() + 32 }));
-        mCompRLbl.setBounds (Rectangle<int> (84, 13).withCentre ({ knobCol.getCentreX(), knobCol.getCentreY() + 64 }));
-    }
-    {
-        auto area = right;
-        const int mid = area.getCentreX();
-        verbMix.setBounds (Rectangle<int> (64, 64).withCentre ({ mid - 55, area.getCentreY() - 8 }));
-        verbMixLbl.setBounds (Rectangle<int> (90, 14).withCentre ({ mid - 55, area.getCentreY() + 34 }));
-        verbSize.setBounds (Rectangle<int> (64, 64).withCentre ({ mid + 55, area.getCentreY() - 8 }));
-        verbSizeLbl.setBounds (Rectangle<int> (90, 14).withCentre ({ mid + 55, area.getCentreY() + 34 }));
-    }
+        auto knobCol = a.removeFromRight (78);
+        panel.setBounds (a);
+        k1.setBounds (Rectangle<int> (44, 44).withCentre ({ knobCol.getCentreX(), knobCol.getCentreY() - 32 }));
+        l1.setBounds (Rectangle<int> (76, 12).withCentre ({ knobCol.getCentreX(), knobCol.getCentreY() - 4 }));
+        k2.setBounds (Rectangle<int> (44, 44).withCentre ({ knobCol.getCentreX(), knobCol.getCentreY() + 26 }));
+        l2.setBounds (Rectangle<int> (76, 12).withCentre ({ knobCol.getCentreX(), knobCol.getCentreY() + 54 }));
+    };
+    masterEq.setBounds (mArea);
+    panelWithKnobsM (mArea, masterComp, mCompT, mCompTLbl, mCompR, mCompRLbl);
+    panelWithKnobsM (mArea, masterSat, mSatDrive, mSatDriveLbl, mSatMix, mSatMixLbl);
 }

@@ -53,22 +53,30 @@ void HarmonyEngine::prepare (double sampleRate, int maxBlockSize)
     leadTmp.assign (chunk, 0.0f);
     wetL.assign (chunk, 0.0f);
     wetR.assign (chunk, 0.0f);
-    sendEL.assign (chunk, 0.0f);
-    sendER.assign (chunk, 0.0f);
-    sendV.assign (chunk, 0.0f);
-    for (auto& v : voices)
+    for (int n = 0; n < graph::kNumNodes; ++n)
     {
-        v.eq.reset();
-        v.comp.prepare (sr);
+        nodeL[n].assign (chunk, 0.0f);
+        nodeR[n].assign (chunk, 0.0f);
     }
-    verb.prepare (sr);
+    for (int v = 0; v < kNumVoices; ++v)
+    {
+        nodeEqL[v].reset();
+        nodeEqR[v].reset();
+        nodeCompL[v].prepare (sr);
+        nodeCompR[v].prepare (sr);
+    }
+    defaultPlan = graph::compile (graph::defaultEdges());
     masterEqL.reset();
     masterEqR.reset();
     masterCompL.prepare (sr);
     masterCompR.prepare (sr);
-    echoL.assign (kEchoSize, 0.0f);
-    echoR.assign (kEchoSize, 0.0f);
-    echoPos = kEchoSize * 4;
+    for (int e = 0; e < 2; ++e)
+    {
+        echoRingL[e].assign (kEchoSize, 0.0f);
+        echoRingR[e].assign (kEchoSize, 0.0f);
+        echoPos[e] = kEchoSize * 4;
+        nodeVerb[e].prepare (sr);
+    }
     toneL = toneR = 0;
     std::fill (std::begin (anaRing), std::end (anaRing), 0.0f);
     std::fill (std::begin (dryRing), std::end (dryRing), 0.0f);
@@ -121,69 +129,178 @@ void HarmonyEngine::process (const float* in, const MultiOut& out, int n)
                 out.leadR[done + i] = leadTmp[(size_t) i];
             }
 
-        std::fill_n (wetL.begin(), (size_t) todo, 0.0f);
-        std::fill_n (wetR.begin(), (size_t) todo, 0.0f);
-        std::fill_n (sendEL.begin(), (size_t) todo, 0.0f);
-        std::fill_n (sendER.begin(), (size_t) todo, 0.0f);
-        std::fill_n (sendV.begin(), (size_t) todo, 0.0f);
+        // 1. Sources: shifted, humanized, levelled, panned voice signals.
         for (int vi = 0; vi < kNumVoices; ++vi)
         {
             auto& v = voices[vi];
-            const auto& vs = settings.voices[vi];
-            float* tapL = out.voiceL[vi];
-            float* tapR = out.voiceR[vi];
             v.shifter.process (src, tmp.data(), todo);
-
-            // Channel chain on the mono shifted signal: EQ -> compressor.
-            if (vs.eqOn && v.eq.active)
-                for (int i = 0; i < todo; ++i)
-                    tmp[(size_t) i] = v.eq.process (tmp[(size_t) i]);
-            if (vs.compOn && vs.compThresh < -0.5f)
-                for (int i = 0; i < todo; ++i)
-                    tmp[(size_t) i] = v.comp.process (tmp[(size_t) i], vs.compThresh, vs.compRatio);
-
+            float* sL = nodeL[graph::kVoice0 + vi].data();
+            float* sR = nodeR[graph::kVoice0 + vi].data();
             for (int i = 0; i < todo; ++i)
             {
                 v.gainL += 0.002f * (v.targetGainL - v.gainL);
                 v.gainR += 0.002f * (v.targetGainR - v.gainR);
-                const float vl = v.gainL * tmp[(size_t) i];
-                const float vr = v.gainR * tmp[(size_t) i];
-                wetL[(size_t) i] += vl;
-                wetR[(size_t) i] += vr;
-                if (vs.sendEcho > 0.001f)
+                sL[i] = v.gainL * tmp[(size_t) i];
+                sR[i] = v.gainR * tmp[(size_t) i];
+            }
+        }
+
+        // 2. Run the signal graph: sum inputs, process, per node in topo order.
+        const graph::Plan* activePlan = plan != nullptr && plan->valid ? plan : &defaultPlan;
+        for (int n : activePlan->order)
+        {
+            float* dL = nodeL[n].data();
+            float* dR = nodeR[n].data();
+            const auto& ins = activePlan->inputs[n];
+            {
+                const float* aL = nodeL[ins[0]].data();
+                const float* aR = nodeR[ins[0]].data();
+                std::copy_n (aL, todo, dL);
+                std::copy_n (aR, todo, dR);
+                for (size_t k = 1; k < ins.size(); ++k)
                 {
-                    sendEL[(size_t) i] += vs.sendEcho * vl;
-                    sendER[(size_t) i] += vs.sendEcho * vr;
+                    const float* bL = nodeL[ins[k]].data();
+                    const float* bR = nodeR[ins[k]].data();
+                    for (int i = 0; i < todo; ++i)
+                    {
+                        dL[i] += bL[i];
+                        dR[i] += bR[i];
+                    }
                 }
-                if (vs.sendVerb > 0.001f)
-                    sendV[(size_t) i] += vs.sendVerb * (vl + vr) * 0.5f;
-                scopeRing[vi][(scopeWrite.load (std::memory_order_relaxed) + (uint32_t) i)
-                              & (kScopeSize - 1)] = vl + vr;
-                if (tapL != nullptr)
+            }
+
+            const int slot = n % kNumVoices; // pool index within its kind
+            switch (graph::kindOf (n))
+            {
+                case graph::NodeKind::Eq:
                 {
-                    tapL[done + i] = vl;
-                    tapR[done + i] = vr;
+                    const auto& vs = settings.voices[slot];
+                    if (vs.eqOn && nodeEqL[slot].active)
+                        for (int i = 0; i < todo; ++i)
+                        {
+                            dL[i] = nodeEqL[slot].process (dL[i]);
+                            dR[i] = nodeEqR[slot].process (dR[i]);
+                        }
+                    break;
+                }
+                case graph::NodeKind::Comp:
+                {
+                    const auto& vs = settings.voices[slot];
+                    if (vs.compOn && vs.compThresh < -0.5f)
+                        for (int i = 0; i < todo; ++i)
+                        {
+                            dL[i] = nodeCompL[slot].process (dL[i], vs.compThresh, vs.compRatio);
+                            dR[i] = nodeCompR[slot].process (dR[i], vs.compThresh, vs.compRatio);
+                        }
+                    break;
+                }
+                case graph::NodeKind::Sat:
+                {
+                    const auto& vs = settings.voices[slot];
+                    if (vs.satOn && vs.satMix > 0.001f)
+                        for (int i = 0; i < todo; ++i)
+                        {
+                            dL[i] = Saturator::process (dL[i], vs.satDrive, vs.satMix);
+                            dR[i] = Saturator::process (dR[i], vs.satDrive, vs.satMix);
+                        }
+                    break;
+                }
+                case graph::NodeKind::Gain:
+                {
+                    const float g = settings.gainLevel[n - graph::kGain0];
+                    for (int i = 0; i < todo; ++i)
+                    {
+                        dL[i] *= g;
+                        dR[i] *= g;
+                    }
+                    break;
+                }
+                case graph::NodeKind::Echo:
+                {
+                    const int e = n - graph::kEcho0;
+                    const auto& es = settings.echo[e];
+                    const int d = (int) (std::clamp (es.time, 0.0f, 1200.0f) * 0.001f * sr);
+                    if (d > 32 && es.mix > 0.001f)
+                    {
+                        float* rL = echoRingL[e].data();
+                        float* rR = echoRingR[e].data();
+                        uint64_t& pos = echoPos[e];
+                        const float fb = std::clamp (es.fb, 0.0f, 0.9f);
+                        for (int i = 0; i < todo; ++i)
+                        {
+                            const float el = rL[(pos - (uint64_t) d) & kEchoMask];
+                            const float er = rR[(pos - (uint64_t) d) & kEchoMask];
+                            rL[pos & kEchoMask] = dL[i] + fb * er; // ping-pong
+                            rR[pos & kEchoMask] = dR[i] + fb * el;
+                            ++pos;
+                            dL[i] += es.mix * el;
+                            dR[i] += es.mix * er;
+                        }
+                    }
+                    break;
+                }
+                case graph::NodeKind::Verb:
+                {
+                    const int e = n - graph::kVerb0;
+                    const auto& vb = settings.verb[e];
+                    if (vb.mix > 0.001f)
+                        for (int i = 0; i < todo; ++i)
+                        {
+                            float rl, rr;
+                            nodeVerb[e].process ((dL[i] + dR[i]) * 0.5f * vb.mix, rl, rr);
+                            dL[i] += rl;
+                            dR[i] += rr;
+                        }
+                    break;
+                }
+                case graph::NodeKind::Out:
+                case graph::NodeKind::Voice:
+                    break; // OUT: summed input *is* the wet bus
+            }
+        }
+
+        // 3. Wet bus = OUT node input sum (silence when nothing reaches OUT).
+        if (! activePlan->inputs[graph::kOut].empty())
+        {
+            std::copy_n (nodeL[graph::kOut].data(), todo, wetL.data());
+            std::copy_n (nodeR[graph::kOut].data(), todo, wetR.data());
+        }
+        else
+        {
+            std::fill_n (wetL.begin(), (size_t) todo, 0.0f);
+            std::fill_n (wetR.begin(), (size_t) todo, 0.0f);
+        }
+
+        // 4. Stems and scopes tap the end of each voice's lane (post-FX,
+        // matching the old fixed chains).
+        for (int vi = 0; vi < kNumVoices; ++vi)
+        {
+            const int tap = activePlan->stemTap[vi];
+            const float* tL = nodeL[tap].data();
+            const float* tR = nodeR[tap].data();
+            float* stemL = out.voiceL[vi];
+            float* stemR = out.voiceR[vi];
+            for (int i = 0; i < todo; ++i)
+            {
+                scopeRing[vi][(scopeWrite.load (std::memory_order_relaxed) + (uint32_t) i)
+                              & (kScopeSize - 1)] = tL[i] + tR[i];
+                if (stemL != nullptr)
+                {
+                    stemL[done + i] = tL[i];
+                    stemR[done + i] = tR[i];
                 }
             }
         }
 
-        // Wet-bus FX: one-pole tone LPF -> mid/side width -> echo.
+        // Wet-bus FX: one-pole tone LPF -> mid/side width. Echo and reverb
+        // live on the canvas as graph nodes now.
         const float toneCoef =
             1.0f - std::exp (-2.0f * kPi * std::clamp (settings.tone, 200.0f, 20000.0f) / (float) sr);
         const float width = std::clamp (settings.width, 0.0f, 2.0f);
-        const int echoSamps = (int) (std::clamp (settings.echoTime, 0.0f, 1200.0f) * 0.001f * sr);
-        bool anyEchoSend = false, anyVerbSend = false;
-        for (const auto& vs : settings.voices)
-        {
-            anyEchoSend = anyEchoSend || vs.sendEcho > 0.001f;
-            anyVerbSend = anyVerbSend || vs.sendVerb > 0.001f;
-        }
-        const bool echoOn = echoSamps > 32 && (settings.echoMix > 0.001f || anyEchoSend);
-        const bool verbOn = settings.verbMix > 0.001f || anyVerbSend;
-        const float fb = std::clamp (settings.echoFb, 0.0f, 0.9f);
         const float dryGain = 1.0f - settings.dryWet;
         const bool masterEqOn = settings.mEqOn && masterEqL.active;
         const bool masterCompOn = settings.mCompOn && settings.mCompThresh < -0.5f;
+        const bool masterSatOn = settings.mSatOn && settings.mSatMix > 0.001f;
 
         for (int i = 0; i < todo; ++i)
         {
@@ -199,27 +316,6 @@ void HarmonyEngine::process (const float* in, const MultiOut& out, int n)
             wl = mid + side;
             wr = mid - side;
 
-            if (echoOn)
-            {
-                const float el = echoL[(echoPos - (uint64_t) echoSamps) & kEchoMask];
-                const float er = echoR[(echoPos - (uint64_t) echoSamps) & kEchoMask];
-                // Echo input: whole wet bus (legacy echoMix path) + per-voice sends.
-                echoL[echoPos & kEchoMask] = wl + sendEL[(size_t) i] + fb * er; // ping-pong
-                echoR[echoPos & kEchoMask] = wr + sendER[(size_t) i] + fb * el;
-                ++echoPos;
-                const float ret = std::max (settings.echoMix, anyEchoSend ? 0.85f : 0.0f);
-                wl += ret * el;
-                wr += ret * er;
-            }
-
-            if (verbOn)
-            {
-                float rl, rr;
-                verb.process (sendV[(size_t) i] + (wl + wr) * 0.5f * settings.verbMix, rl, rr);
-                wl += rl;
-                wr += rr;
-            }
-
             const float lead = leadTmp[(size_t) i];
             L[i] = dryGain * lead + settings.dryWet * wl;
             R[i] = dryGain * lead + settings.dryWet * wr;
@@ -232,6 +328,11 @@ void HarmonyEngine::process (const float* in, const MultiOut& out, int n)
             {
                 L[i] = masterCompL.process (L[i], settings.mCompThresh, settings.mCompRatio);
                 R[i] = masterCompR.process (R[i], settings.mCompThresh, settings.mCompRatio);
+            }
+            if (masterSatOn)
+            {
+                L[i] = Saturator::process (L[i], settings.mSatDrive, settings.mSatMix);
+                R[i] = Saturator::process (R[i], settings.mSatDrive, settings.mSatMix);
             }
             scopeRing[kNumVoices][(scopeWrite.load (std::memory_order_relaxed) + (uint32_t) i)
                                   & (kScopeSize - 1)] = (L[i] + R[i]) * 0.5f;
@@ -296,11 +397,13 @@ void HarmonyEngine::runAnalysis()
     for (int vi = 0; vi < kNumVoices; ++vi)
     {
         const auto& vs = settings.voices[vi];
-        voices[vi].eq.set ((float) sr, vs.eqF, vs.eqG);
+        nodeEqL[vi].set ((float) sr, vs.eqF, vs.eqG);
+        nodeEqR[vi].set ((float) sr, vs.eqF, vs.eqG);
     }
     masterEqL.set ((float) sr, settings.mEqF, settings.mEqG);
     masterEqR.set ((float) sr, settings.mEqF, settings.mEqG);
-    verb.setSize (settings.verbSize);
+    for (int e = 0; e < 2; ++e)
+        nodeVerb[e].setSize (settings.verb[e].size);
 
     int held[16], numHeld = 0;
     bool heldPc[12] = {};
@@ -396,7 +499,7 @@ void HarmonyEngine::runAnalysis()
 
         voiceHzOut[vi] = sounding && g > 0.0f ? lastEst.f0 * ratio : 0.0f;
         voiceGainOut[vi] = sounding ? g : 0.0f;
-        compGrOut[vi] = vs.compOn ? voices[vi].comp.grDb : 0.0f;
+        compGrOut[vi] = vs.compOn ? std::min (nodeCompL[vi].grDb, nodeCompR[vi].grDb) : 0.0f;
     }
     compGrOut[kNumVoices] = settings.mCompOn
                                 ? std::min (masterCompL.grDb, masterCompR.grDb)

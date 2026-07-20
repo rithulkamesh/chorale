@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dsp/HarmonyEngine.h"
+#include "dsp/SignalGraph.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 
 // Chorale: vocal harmonizer / stacker. mono in -> pitch detection -> key/scale
@@ -53,6 +54,22 @@ public:
     // Compressor gain reduction (negative dB), same channel scheme.
     float compGrDb (int ch) const { return engine.compGrDb (ch); }
 
+    // --- Voice-side signal graph (edges live in apvts.state -> "GRAPH") ----
+    std::vector<graph::Edge> graphEdges() const;
+    bool graphAddEdge (int from, int to);    // false if it would cycle
+    void graphRemoveEdge (int from, int to);
+    void graphResetToDefault();
+    bool nodeOnCanvas (int id) const;        // wired, or explicitly placed
+    juce::Point<int> nodePos (int id, juce::Point<int> fallback) const;
+    void setNodePos (int id, juce::Point<int>);
+    void ensureNodeVisible (int id, juce::Point<int>);
+    void rebuildGraph(); // recompile from state; call after replaceState
+
+    // Pre-1.2 states (no GRAPH child) carried wet-bus echo/reverb + per-voice
+    // sends; rewrite them as a wired patch with ECHO/VERB nodes. Call on any
+    // tree about to go into replaceState (host state, user preset files).
+    static void migrateState (juce::ValueTree& state);
+
     // Live telemetry for the editor (written on the audio thread).
     std::atomic<float> uiF0 { 0.0f };   // 0 = unvoiced
     std::atomic<int> uiRoot { 0 };
@@ -69,16 +86,25 @@ private:
     std::vector<float> scratchIn, scratchR;
 
     std::atomic<float>*pDryWet, *pKeyRoot, *pScale, *pCorrect, *pHumanize,
-        *pTone, *pWidth, *pEchoTime, *pEchoFb, *pEchoMix, *pLatMode;
+        *pTone, *pWidth, *pLatMode;
     juce::ValueTree abStored; // the inactive A/B slot
     std::atomic<float>*pMode[kNumVoices], *pDegree[kNumVoices], *pNote[kNumVoices],
         *pGain[kNumVoices], *pPan[kNumVoices], *pDetune[kNumVoices],
         *pSolo[kNumVoices], *pMute[kNumVoices];
     std::atomic<float>*pEqOn[kNumVoices], *pEqF[kNumVoices][8], *pEqG[kNumVoices][8],
         *pCompOn[kNumVoices], *pCompT[kNumVoices], *pCompR[kNumVoices],
-        *pSendEcho[kNumVoices], *pSendVerb[kNumVoices];
-    std::atomic<float>*pMEqOn, *pMEqF[8], *pMEqG[8], *pVerbSize, *pVerbMix,
-        *pMCompOn, *pMCompT, *pMCompR, *pMidiAdapt;
+        *pSatOn[kNumVoices], *pSatDrive[kNumVoices], *pSatMix[kNumVoices];
+    std::atomic<float>*pMEqOn, *pMEqF[8], *pMEqG[8],
+        *pMCompOn, *pMCompT, *pMCompR,
+        *pMSatOn, *pMSatDrive, *pMSatMix, *pMidiAdapt, *pGainLevel[4],
+        *pEchoTime[2], *pEchoFb[2], *pEchoMix[2], *pVerbSize[2], *pVerbMix[2];
+
+    juce::ValueTree graphTree();                 // GRAPH child, created on demand
+    juce::ValueTree graphTreeIfPresent() const;
+    // Compiled plans stay alive until destruction: the audio thread may still
+    // be reading a retired one, and plans are tiny.
+    std::vector<std::unique_ptr<graph::Plan>> planKeepalive;
+    std::atomic<const graph::Plan*> activePlan { nullptr };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ChoraleProcessor)
 };

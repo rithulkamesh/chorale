@@ -111,11 +111,20 @@ void writeWav (const std::string& path, const std::vector<float>& l, const std::
 
 struct EngineResult { std::vector<float> l, r; };
 
+// Tests run against the classic full chains so per-voice FX are in-lane.
+const graph::Plan& chainPlan()
+{
+    static const graph::Plan p = graph::compile (graph::chainEdges());
+    return p;
+}
+
 EngineResult runEngine (const std::vector<float>& in, const HarmonySettings& s,
-                        const std::vector<int>& midiNotes = {})
+                        const std::vector<int>& midiNotes = {},
+                        const graph::Plan* plan = nullptr)
 {
     HarmonyEngine eng;
     eng.prepare (kSr, 512);
+    eng.setGraph (plan != nullptr ? plan : &chainPlan());
     eng.setSettings (s);
     for (int note : midiNotes)
         eng.noteOn (note);
@@ -305,8 +314,8 @@ int main()
     }
 
     // 6f. Per-voice channel FX: mid-band cut at the harmony fundamental drops
-    // level, the compressor changes gain, and a reverb send rings past the
-    // end of the input.
+    // level, the compressor changes gain, and a wired REVERB node rings past
+    // the end of the input.
     {
         auto tone = synth ({ { 60, 1.0 } });
         tone.resize (tone.size() + (size_t) (0.5 * kSr), 0.0f); // silence for tails
@@ -342,12 +351,21 @@ int main()
         const double dbDelta = 20.0 * std::log10 (rms (comp.l, n / 4, n / 2) / flatBody);
         CHECK (std::abs (dbDelta) > 1.0); // gain computer clearly engaged
 
+        // Reverb as a graph node: splice VERB0 into voice 1's lane end.
+        auto verbEdges = graph::chainEdges();
+        verbEdges.erase (std::remove (verbEdges.begin(), verbEdges.end(),
+                                      graph::Edge { graph::kSat0, graph::kOut }),
+                         verbEdges.end());
+        verbEdges.push_back ({ graph::kSat0, graph::kVerb0 });
+        verbEdges.push_back ({ graph::kVerb0, graph::kOut });
+        const auto verbPlan = graph::compile (verbEdges);
+        CHECK (verbPlan.valid);
         auto verbS = s;
-        verbS.voices[0].sendVerb = 1.0f;
-        verbS.verbSize = 0.8f;
-        const auto verb = runEngine (tone, verbS);
+        verbS.verb[0].size = 0.8f;
+        verbS.verb[0].mix = 1.0f;
+        const auto verb = runEngine (tone, verbS, {}, &verbPlan);
         CHECK (rms (verb.l, n - (size_t) (0.2 * kSr), n) > flatTail * 4.0 + 1e-4);
-        std::puts ("ok: per-voice EQ cut, compressor gain, reverb-send tail");
+        std::puts ("ok: per-voice EQ cut, compressor gain, reverb-node tail");
     }
 
     // 6g. Master EQ: -12 dB high shelf on the mix darkens the output.
@@ -391,6 +409,48 @@ int main()
         std::puts ("ok: MIDI adapt snaps layers to held chord, releases to intervals");
     }
 
+    // 6h2. Saturation adds harmonic content (HF diff-energy rises) on a voice
+    // and on the master bus.
+    {
+        const auto tone = synth ({ { 60, 1.0 } });
+        HarmonySettings s;
+        s.dryWet = 1.0f;
+        s.scaleMode = 1;
+        s.voices[0] = { 1, 9, 57, 1.0f, 0.0f, 0.0f };
+        auto hf = [] (const std::vector<float>& x)
+        {
+            double e = 0;
+            for (size_t i = 1; i < x.size(); ++i)
+                e += (x[i] - x[i - 1]) * (x[i] - x[i - 1]);
+            double t = 0;
+            for (float v : x)
+                t += v * v;
+            return e / (t + 1e-12); // normalized: brightness, not level
+        };
+        auto peak = [] (const std::vector<float>& x)
+        {
+            float p = 0;
+            for (float v : x)
+                p = std::max (p, std::abs (v));
+            return p;
+        };
+        const auto clean = runEngine (tone, s);
+        auto satS = s;
+        satS.voices[0].satOn = true;
+        satS.voices[0].satDrive = 1.0f;
+        const auto driven = runEngine (tone, satS);
+        // Brighter AND peak-limited: the shaper is engaged.
+        CHECK (hf (driven.l) > hf (clean.l) * 1.02);
+        CHECK (peak (driven.l) < peak (clean.l) * 0.95);
+
+        auto mSatS = s;
+        mSatS.mSatOn = true;
+        mSatS.mSatDrive = 1.0f;
+        const auto mDriven = runEngine (tone, mSatS);
+        CHECK (hf (mDriven.l) > hf (clean.l) * 1.1);
+        std::puts ("ok: saturation brightens voice and master");
+    }
+
     // 6i. Master compressor: engaged on the mix, level clearly changes.
     {
         const auto tone = synth ({ { 60, 1.0 } });
@@ -431,6 +491,7 @@ int main()
         {
             HarmonyEngine eng;
             eng.prepare (kSr, 512);
+            eng.setGraph (&chainPlan());
             eng.setSettings (set);
             const size_t len = tone.size();
             std::vector<float> mainL (len), mainR (len), v1r (len), v2r (len);
@@ -467,6 +528,124 @@ int main()
         CHECK (rms (v1b) < rms (v1a) * 0.75);              // stem 1 reflects its EQ
         CHECK (std::abs (rms (v2b) / rms (v2a) - 1.0) < 0.05); // stem 2 untouched
         std::puts ("ok: stems carry per-voice FX chains");
+    }
+
+    // 6k. Signal graph: custom wiring. Two voices summed through one shared
+    // EQ node and a GAIN node into OUT; an unwired voice stays silent; a
+    // cyclic edge list is rejected.
+    {
+        const auto tone = synth ({ { 60, 1.0 } });
+        HarmonySettings s;
+        s.dryWet = 1.0f;
+        s.scaleMode = 1;
+        s.humanize = 0.0f;
+        s.voices[0] = { 1, 9, 57, 1.0f, 0.0f, 0.0f };  // 3rd up
+        s.voices[1] = { 1, 11, 57, 1.0f, 0.0f, 0.0f }; // 5th up
+        s.voices[2] = { 1, 14, 57, 1.0f, 0.0f, 0.0f }; // oct up (to be unwired)
+        s.gainLevel[0] = 0.5f;
+
+        // V0 + V1 -> EQ0 -> GAIN0(0.5) -> OUT. V2 unwired.
+        std::vector<graph::Edge> edges = {
+            { graph::kVoice0 + 0, graph::kEq0 },
+            { graph::kVoice0 + 1, graph::kEq0 },
+            { graph::kEq0, graph::kGain0 },
+            { graph::kGain0, graph::kOut },
+        };
+        const auto plan = graph::compile (edges);
+        CHECK (plan.valid);
+
+        auto run = [&] (const graph::Plan* p)
+        {
+            HarmonyEngine eng;
+            eng.prepare (kSr, 512);
+            eng.setGraph (p);
+            eng.setSettings (s);
+            EngineResult out;
+            out.l.resize (tone.size());
+            out.r.resize (tone.size());
+            for (size_t i = 0; i < tone.size(); i += 512)
+                eng.process (tone.data() + i, out.l.data() + i, out.r.data() + i,
+                             (int) std::min<size_t> (512, tone.size() - i));
+            return out;
+        };
+        auto rms = [] (const std::vector<float>& x)
+        {
+            double e = 0;
+            for (float v : x)
+                e += v * v;
+            return std::sqrt (e / (double) x.size());
+        };
+
+        const auto wired = run (&plan);
+        const auto def = run (nullptr); // default patch: all three voices
+        CHECK (rms (wired.l) > 0.01);              // audio flows through the custom path
+        CHECK (rms (wired.l) < rms (def.l) * 0.85); // gain 0.5 + dropped V2
+
+        // GAIN node actually scales: same wiring at unity is louder.
+        auto unity = s;
+        unity.gainLevel[0] = 1.0f;
+        HarmonyEngine eng2;
+        eng2.prepare (kSr, 512);
+        eng2.setGraph (&plan);
+        eng2.setSettings (unity);
+        std::vector<float> ul (tone.size()), ur (tone.size());
+        for (size_t i = 0; i < tone.size(); i += 512)
+            eng2.process (tone.data() + i, ul.data() + i, ur.data() + i,
+                          (int) std::min<size_t> (512, tone.size() - i));
+        CHECK (rms (ul) > rms (wired.l) * 1.5);
+
+        // Cycles rejected.
+        auto cyc = edges;
+        cyc.push_back ({ graph::kGain0, graph::kEq0 });
+        CHECK (! graph::compile (cyc).valid);
+        std::puts ("ok: signal graph routes, sums, gains, rejects cycles");
+    }
+
+    // 6l. ECHO node: repeats ring past the end of the input at the node's
+    // time; MIX 0 leaves the lane dry. Cycles through an echo node rejected.
+    {
+        auto tone = synth ({ { 60, 0.8 } });
+        tone.resize (tone.size() + (size_t) (0.6 * kSr), 0.0f); // room for repeats
+        HarmonySettings s;
+        s.dryWet = 1.0f;
+        s.scaleMode = 1;
+        s.humanize = 0.0f;
+        s.voices[0] = { 1, 9, 57, 1.0f, 0.0f, 0.0f };
+
+        const std::vector<graph::Edge> edges = {
+            { graph::kVoice0, graph::kEcho0 },
+            { graph::kEcho0, graph::kOut },
+        };
+        const auto plan = graph::compile (edges);
+        CHECK (plan.valid);
+
+        auto rms = [] (const std::vector<float>& x, size_t a, size_t b)
+        {
+            double e = 0;
+            for (size_t i = a; i < b; ++i)
+                e += x[i] * x[i];
+            return std::sqrt (e / (double) (b - a));
+        };
+        const size_t n = tone.size();
+
+        auto echoS = s;
+        echoS.echo[0] = { 300.0f, 0.5f, 0.9f };
+        const auto wet = runEngine (tone, echoS, {}, &plan);
+        auto dryS = s;
+        dryS.echo[0] = { 300.0f, 0.5f, 0.0f }; // mix 0 = bypass
+        const auto dry = runEngine (tone, dryS, {}, &plan);
+        const size_t tailA = n - (size_t) (0.3 * kSr);
+        CHECK (rms (wet.l, tailA, n) > rms (dry.l, tailA, n) * 4.0 + 1e-4);
+        CHECK (rms (dry.l, n / 4, n / 2) > 0.01); // dry still flows through the node
+
+        // A feedback wire through the echo node is still a cycle: rejected.
+        std::vector<graph::Edge> cyc = {
+            { graph::kVoice0, graph::kEcho0 },
+            { graph::kEcho0, graph::kVerb0 },
+            { graph::kVerb0, graph::kEcho0 },
+        };
+        CHECK (! graph::compile (cyc).valid);
+        std::puts ("ok: echo node repeats, bypasses at mix 0, rejects cycles");
     }
 
     // 7. Demo renders (listen: tests_out/*.wav).

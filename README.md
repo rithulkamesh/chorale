@@ -71,8 +71,17 @@ three layouts.
 - **8 voices:** Scale (diatonic interval), Note (pedal / drone), or MIDI
 - **Lead correction:** off, natural, or hard snap to scale
 - **Humanize:** independent pitch drift and level flutter
-- **Per-voice FX chain:** `EQ → COMP → ECHO → VERB` (EQ/COMP opt-in)
-- **Master chain:** `EQ → COMP → REVERB`
+- **Patchable signal graph:** the FX view is a canvas — wire voices through a
+  pool of EQ / COMP / SAT / GAIN / ECHO / REVERB nodes into OUT however you
+  like. Every input sums (GAIN nodes are leveled summers), cables drag
+  port-to-port, right-click cuts or adds nodes, and the graph rides in
+  presets/A-B/undo. Echo and reverb are wireable nodes — share one across
+  voices or give a voice its own; there are no send knobs. Old sessions
+  migrate to an equivalent patch automatically
+  ([design](docs/v1.2-signal-graph.md))
+- **Node editors with live visuals:** spectrum-backed 8-band EQ, compressor
+  transfer curve with GR meter, waveshaper curve, echo taps, reverb decay
+- **Master chain:** fixed `EQ → COMP → SAT` on the main mix
 - **MIDI adapt:** Scale/Note voices retune to a held MIDI chord; full MIDI mode
   for vocoder-style tracking
 - **Key:** auto (Krumhansl-Schmuckler) or set root + mode

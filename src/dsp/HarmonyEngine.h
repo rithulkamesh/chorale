@@ -2,6 +2,7 @@
 
 #include "KeyEngine.h"
 #include "PsolaShifter.h"
+#include "SignalGraph.h"
 #include "VoiceFx.h"
 #include "YinTracker.h"
 #include <atomic>
@@ -17,10 +18,21 @@ struct HarmonySettings
     float humanize = 0;   // 0..1 slow pitch/level drift on harmony voices
     float tone = 20000;   // wet-bus lowpass cutoff Hz
     float width = 1.0f;   // wet-bus stereo width, 0 mono .. 2 extra wide
-    float echoTime = 0;   // wet-bus echo delay ms (0 disables)
-    float echoFb = 0.35f; // echo feedback 0..0.9
-    float echoMix = 0;    // echo send level 0..1
     bool lowLatency = false; // live mode: halve PSOLA lookahead (~23 ms)
+
+    // ECHO / VERB node params (graph pool). Both nodes are additive: dry
+    // passes at unity, mix scales the wet tail.
+    struct Echo
+    {
+        float time = 350; // delay ms (<= ~1 ms disables)
+        float fb = 0.35f; // feedback 0..0.9
+        float mix = 0.5f; // wet tail level 0..1
+    } echo[2];
+    struct Verb
+    {
+        float size = 0.5f;
+        float mix = 0.35f;
+    } verb[2];
 
     struct Voice
     {
@@ -36,34 +48,40 @@ struct HarmonySettings
         bool solo = false;
         bool mute = false;
 
-        // Per-voice channel chain: EQ -> compressor -> sends. Each module has
-        // an explicit enable so nothing runs (or reads as loaded) by default.
+        // Per-voice channel chain modules (graph node pool). Each has an
+        // explicit enable so nothing runs (or reads as loaded) by default.
         bool eqOn = false;
         float eqF[8] = { 80, 200, 500, 1200, 2500, 5000, 9000, 14000 }; // Hz
         float eqG[8] = {};               // dB; band 0 = low shelf, 7 = high shelf
         bool compOn = false;
         float compThresh = 0;            // dB
         float compRatio = 2;             // 1..8
-        float sendEcho = 0, sendVerb = 0;
+        bool satOn = false;
+        float satDrive = 0.3f, satMix = 1.0f;
     } voices[8];
 
     // MIDI adapt: held notes retune all sounding Scale/Note voices to the
     // nearest chord tone; released -> back to their configured intervals.
     bool midiAdapt = false;
 
-    // Master section: EQ -> compressor -> reverb bus on the main mix.
-    float verbSize = 0.5f, verbMix = 0;
+    // GAIN node levels (graph pool).
+    float gainLevel[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+
+    // Master section: EQ -> compressor -> saturator on the main mix.
     bool mEqOn = false;
     float mEqF[8] = { 80, 200, 500, 1200, 2500, 5000, 9000, 14000 };
     float mEqG[8] = {};
     bool mCompOn = false;
     float mCompThresh = 0, mCompRatio = 2;
+    bool mSatOn = false;
+    float mSatDrive = 0.3f, mSatMix = 1.0f;
 };
 
 // Full harmonizer chain, JUCE-free so it can run offline in tests:
 // input -> YinTracker (per hop) -> KeyEngine -> per-voice ratio ->
-// N x PsolaShifter -> pan/solo/mute mix -> wet-bus FX (tone/width/echo) ->
-// blend with lead (delayed dry, or pitch-corrected via its own shifter).
+// N x PsolaShifter -> signal graph (EQ/COMP/SAT/GAIN/ECHO/VERB nodes) ->
+// wet bus (tone/width) -> blend with lead (delayed dry, or pitch-corrected
+// via its own shifter).
 class HarmonyEngine
 {
 public:
@@ -71,6 +89,11 @@ public:
     static constexpr int kHop = 256;
 
     void prepare (double sampleRate, int maxBlockSize);
+
+    // Voice-side signal graph. nullptr -> the default patch (fixed chains).
+    // The plan must outlive its use; the processor keeps retired plans alive.
+    void setGraph (const graph::Plan* p) { plan = p; }
+
     void setSettings (const HarmonySettings& s)
     {
         settings = s;
@@ -144,8 +167,6 @@ private:
     struct Voice
     {
         PsolaShifter shifter;
-        ChannelEq eq;
-        Compressor comp;
         float gainL = 0, gainR = 0; // smoothed
         float targetGainL = 0, targetGainR = 0;
         double ph1 = 0, ph2 = 0, ph3 = 0; // humanize drift oscillators
@@ -161,13 +182,20 @@ private:
 
     double sr = 44100.0;
     std::vector<float> tmp, leadTmp, wetL, wetR;
-    std::vector<float> sendEL, sendER, sendV; // per-block send accumulators
-    SimpleReverb verb;
     ChannelEq masterEqL, masterEqR;
     Compressor masterCompL, masterCompR;
     float compGrOut[kNumVoices + 1] = {};
-    std::vector<float> echoL, echoR;
-    uint64_t echoPos = 0;
+
+    // Graph node pool: stereo FX state per node (EQ/COMP nodes are stereo now
+    // that any mix of panned voices can flow through them).
+    const graph::Plan* plan = nullptr; // nullptr -> defaultPlan
+    graph::Plan defaultPlan;
+    ChannelEq nodeEqL[kNumVoices], nodeEqR[kNumVoices];
+    Compressor nodeCompL[kNumVoices], nodeCompR[kNumVoices];
+    std::vector<float> nodeL[graph::kNumNodes], nodeR[graph::kNumNodes];
+    std::vector<float> echoRingL[2], echoRingR[2]; // per ECHO node
+    uint64_t echoPos[2] = {};
+    SimpleReverb nodeVerb[2];
     float toneL = 0, toneR = 0; // one-pole LPF state
     float scopeRing[kScopeChannels][kScopeSize] = {};
     std::atomic<uint32_t> scopeWrite { 0 };

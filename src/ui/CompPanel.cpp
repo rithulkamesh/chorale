@@ -153,6 +153,13 @@ void CompPanel::paint (Graphics& g)
         g.setFont (ui::mono (7.0f));
         g.drawText ("GR", Rectangle<float> (meter.getX() - 4.0f, lane.getBottom() - 2.0f, 22.0f, 10.0f),
                     Justification::centred);
+        if (grSmooth > 0.1f) // numeric readout while reducing
+        {
+            g.setColour (ui::kText.withAlpha (0.85f));
+            g.drawText ("-" + String (grSmooth, 1),
+                        Rectangle<float> (meter.getX() - 14.0f, meter.getY() - 1.0f, 34.0f, 10.0f),
+                        Justification::centred);
+        }
     }
 
     g.setColour (ui::kBorder);

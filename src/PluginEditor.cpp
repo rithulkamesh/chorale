@@ -62,12 +62,9 @@ ChoraleEditor::ChoraleEditor (ChoraleProcessor& p)
     initKnob (humanize, "humanize", humanizeAtt, ui::kAccent);
     initKnob (tone, "tone", toneAtt, ui::kAccent);
     initKnob (width, "width", widthAtt, ui::kAccent);
-    initKnob (echoTime, "echoTime", echoTimeAtt, ui::kAccent);
-    initKnob (echoFb, "echoFb", echoFbAtt, ui::kAccent);
-    initKnob (echoMix, "echoMix", echoMixAtt, ui::kAccent);
 
-    const char* fxNames[6] = { "HUMANIZE", "TONE", "WIDTH", "ECHO", "FEEDBACK", "ECHO MIX" };
-    for (int i = 0; i < 6; ++i)
+    const char* fxNames[3] = { "HUMANIZE", "TONE", "WIDTH" };
+    for (int i = 0; i < 3; ++i)
     {
         fxLbls[i].setText (fxNames[i], dontSendNotification);
         fxLbls[i].setFont (ui::sans (9.0f));
@@ -138,6 +135,7 @@ ChoraleEditor::ChoraleEditor (ChoraleProcessor& p)
         b->setColour (TextButton::textColourOffId, ui::kDim);
         content.addAndMakeVisible (*b);
     }
+    fx.onVoicePicked = [this] (int v) { selectVoice (v); };
     stageBtn.onClick = [this] { setMainView (0); };
     mixerBtn.onClick = [this] { setMainView (1); };
     fxBtn.onClick = [this] { setMainView (2); };
@@ -307,7 +305,10 @@ void ChoraleEditor::loadUserPreset (const File& f)
 {
     if (auto xml = XmlDocument::parse (f))
     {
-        proc.apvts.replaceState (ValueTree::fromXml (*xml));
+        auto tree = ValueTree::fromXml (*xml);
+        ChoraleProcessor::migrateState (tree); // pre-1.2 user preset files
+        proc.apvts.replaceState (tree);
+        proc.rebuildGraph();
         currentUserFile = f;
         presetBtn.setButtonText (f.getFileNameWithoutExtension());
         detail.setVoice (0);
@@ -579,13 +580,13 @@ void ChoraleEditor::layoutContent()
     footer.removeFromRight (10);
     updateBtn.setBounds (footer.removeFromRight (130));
 
-    // Global wet-bus knob bar.
+    // Global wet-bus knob bar. Echo/reverb live on the FX canvas as nodes.
     auto fxBar = r.removeFromBottom (78).reduced (14, 4);
-    Slider* knobs[6] = { &humanize, &tone, &width, &echoTime, &echoFb, &echoMix };
-    const int kw = jmin (110, fxBar.getWidth() / 6);
-    const int pad = (fxBar.getWidth() - kw * 6) / 2;
+    Slider* knobs[3] = { &humanize, &tone, &width };
+    const int kw = jmin (110, fxBar.getWidth() / 3);
+    const int pad = (fxBar.getWidth() - kw * 3) / 2;
     fxBar.removeFromLeft (pad);
-    for (int i = 0; i < 6; ++i)
+    for (int i = 0; i < 3; ++i)
     {
         auto cell = fxBar.removeFromLeft (kw);
         knobs[i]->setBounds (cell.removeFromTop (54).withSizeKeepingCentre (54, 54));

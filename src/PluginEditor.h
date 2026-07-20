@@ -56,9 +56,9 @@ private:
 
     juce::TextButton presetBtn { "Presets..." };
     juce::ComboBox keyRoot, scale, correct, latMode;
-    juce::Slider mix, humanize, tone, width, echoTime, echoFb, echoMix;
+    juce::Slider mix, humanize, tone, width;
     juce::Label keyLbl, scaleLbl, correctLbl, mixLbl, autoKeyLbl, pitchLbl, latencyLbl;
-    juce::Label fxLbls[6];
+    juce::Label fxLbls[3];
     juce::TextButton stageBtn { "STAGE" }, mixerBtn { "MIXER" }, fxBtn { "FX" };
     juce::TextButton undoBtn, redoBtn, aBtn { "A" }, bBtn { "B" };
     juce::TextButton midiAdaptBtn { "MIDI ADAPT" };
@@ -79,7 +79,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>
         keyAtt, scaleAtt, correctAtt, latAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>
-        mixAtt, humanizeAtt, toneAtt, widthAtt, echoTimeAtt, echoFbAtt, echoMixAtt;
+        mixAtt, humanizeAtt, toneAtt, widthAtt;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ChoraleEditor)
 };
