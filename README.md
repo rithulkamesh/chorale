@@ -121,6 +121,27 @@ cmake --build build --target dsp_tests && ./build/dsp_tests
 build/harmonize in.wav out.wav [dryWet] [key|auto] [scale|auto] [wetonly]
 ```
 
+**CPU benchmark** (offline, JUCE-free — measures the DSP path only):
+
+```sh
+cmake --build build --target benchmark
+./build/benchmark [blockSize] [seconds] [scenario]
+```
+
+`scenario` is one of `yin`, `psola`, `engine-1v`, `engine-2v`, `engine-8v`,
+`engine-chain`, or `all` (default). Prints μs/block and CPU % vs real-time
+budget (RTF &lt; 100% = safe at that block size). Example on Apple Silicon @
+512 samples:
+
+```
+yin                141 us/blk    1.2% CPU
+engine-8v          224 us/blk    1.9% CPU
+engine-chain       227 us/blk    2.0% CPU   # all voices + EQ/COMP/SAT wired
+```
+
+YIN pitch analysis dominates; inactive voices skip their PSOLA shifters so
+8-voice cost stays close to 1-voice.
+
 CMake 3.24+, C++20. JUCE fetches on configure. Linux also needs:
 
 ```sh

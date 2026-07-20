@@ -85,6 +85,37 @@ void HarmonyEngine::prepare (double sampleRate, int maxBlockSize)
     hopRemaining = kHop;
     lastEst = {};
     std::fill (std::begin (heldNotes), std::end (heldNotes), false);
+    updateVoiceGate();
+    leadActive = settings.correct != 0;
+}
+
+void HarmonyEngine::updateVoiceGate (const bool midiSounding[kNumVoices])
+{
+    using VM = HarmonySettings::Voice;
+    bool anySolo = false;
+    for (const auto& vs : settings.voices)
+        anySolo = anySolo || (vs.solo && vs.mode != VM::Off);
+
+    int numHeld = 0;
+    for (int note = 0; note < 128; ++note)
+        if (heldNotes[note])
+            ++numHeld;
+
+    int midiIdx = 0;
+    for (int vi = 0; vi < kNumVoices; ++vi)
+    {
+        const auto& vs = settings.voices[vi];
+        voiceActive[vi] = vs.mode != VM::Off && ! vs.mute && ! (anySolo && ! vs.solo);
+        if (vs.mode == VM::Midi)
+        {
+            if (midiSounding != nullptr)
+                voiceActive[vi] = voiceActive[vi] && midiSounding[vi];
+            else
+                voiceActive[vi] = voiceActive[vi] && midiIdx < numHeld;
+            if (voiceActive[vi])
+                ++midiIdx;
+        }
+    }
 }
 
 void HarmonyEngine::noteOn (int note)
@@ -110,14 +141,15 @@ void HarmonyEngine::process (const float* in, const MultiOut& out, int n)
         float* R = out.mainR + done;
 
         // Lead path: pitch-corrected (own shifter) or latency-aligned dry.
-        // The correction shifter always runs so its buffers stay warm when
-        // toggling; both paths share the same kLatency delay.
-        leadShifter.process (src, leadTmp.data(), todo);
+        if (leadActive)
+            leadShifter.process (src, leadTmp.data(), todo);
         for (int i = 0; i < todo; ++i)
         {
             anaRing[anaPos++ & kRingMask] = src[i];
             dryRing[dryPos & kRingMask] = src[i];
-            if (settings.correct == 0)
+            if (! leadActive)
+                leadTmp[(size_t) i] = dryRing[(dryPos - (uint64_t) curLatency) & kRingMask];
+            else if (settings.correct == 0)
                 leadTmp[(size_t) i] = dryRing[(dryPos - (uint64_t) curLatency) & kRingMask];
             ++dryPos;
         }
@@ -133,15 +165,28 @@ void HarmonyEngine::process (const float* in, const MultiOut& out, int n)
         for (int vi = 0; vi < kNumVoices; ++vi)
         {
             auto& v = voices[vi];
-            v.shifter.process (src, tmp.data(), todo);
             float* sL = nodeL[graph::kVoice0 + vi].data();
             float* sR = nodeR[graph::kVoice0 + vi].data();
-            for (int i = 0; i < todo; ++i)
+            if (voiceActive[vi])
             {
-                v.gainL += 0.002f * (v.targetGainL - v.gainL);
-                v.gainR += 0.002f * (v.targetGainR - v.gainR);
-                sL[i] = v.gainL * tmp[(size_t) i];
-                sR[i] = v.gainR * tmp[(size_t) i];
+                v.shifter.process (src, tmp.data(), todo);
+                for (int i = 0; i < todo; ++i)
+                {
+                    v.gainL += 0.002f * (v.targetGainL - v.gainL);
+                    v.gainR += 0.002f * (v.targetGainR - v.gainR);
+                    sL[i] = v.gainL * tmp[(size_t) i];
+                    sR[i] = v.gainR * tmp[(size_t) i];
+                }
+            }
+            else
+            {
+                for (int i = 0; i < todo; ++i)
+                {
+                    v.gainL += 0.002f * (v.targetGainL - v.gainL);
+                    v.gainR += 0.002f * (v.targetGainR - v.gainR);
+                    sL[i] = 0.0f;
+                    sR[i] = 0.0f;
+                }
             }
         }
 
@@ -389,8 +434,12 @@ void HarmonyEngine::runAnalysis()
         const float strength = settings.correct == 2 ? 1.0f : 0.65f;
         corrRatio = (float) std::exp2 (strength * (snapped - detMidi) / 12.0);
     }
-    leadShifter.setPeriod (lastEst.voiced ? (float) (sr / lastEst.f0) : 0.0f, lastEst.voiced);
-    leadShifter.setRatio (corrRatio);
+    leadActive = settings.correct != 0;
+    if (leadActive)
+    {
+        leadShifter.setPeriod (lastEst.voiced ? (float) (sr / lastEst.f0) : 0.0f, lastEst.voiced);
+        leadShifter.setRatio (corrRatio);
+    }
 
     // Channel-strip coefficients follow the settings at hop rate (cheap, and
     // avoids threading games with the UI).
@@ -482,9 +531,6 @@ void HarmonyEngine::runAnalysis()
         }
         ratio *= std::exp2 (driftCents / 1200.0f);
 
-        v.shifter.setPeriod (lastEst.voiced ? (float) (sr / lastEst.f0) : 0.0f, lastEst.voiced);
-        v.shifter.setRatio (ratio);
-
         // Unvoiced passthrough stays audible (doubles consonants/breaths);
         // a MIDI voice with no assigned note goes silent.
         float g = vs.mode != VM::Off ? vs.gain * levelMul : 0.0f;
@@ -492,6 +538,12 @@ void HarmonyEngine::runAnalysis()
             g = 0.0f;
         if (vs.mute || (anySolo && ! vs.solo))
             g = 0.0f;
+
+        voiceActive[vi] = vs.mode != VM::Off && ! (vs.mute || (anySolo && ! vs.solo))
+                          && ! (vs.mode == VM::Midi && ! sounding);
+
+        v.shifter.setPeriod (lastEst.voiced ? (float) (sr / lastEst.f0) : 0.0f, lastEst.voiced);
+        v.shifter.setRatio (ratio);
 
         const float p = (std::clamp (vs.pan, -1.0f, 1.0f) + 1.0f) * 0.25f * kPi; // constant power
         v.targetGainL = g * std::cos (p);

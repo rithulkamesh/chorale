@@ -59,6 +59,16 @@ void PsolaShifter::process (const float* in, float* out, int n)
     }
 }
 
+void PsolaShifter::ensureGrainWin (int T)
+{
+    if (T == grainWinT)
+        return;
+    grainWinT = T;
+    grainWin.resize ((size_t) (2 * T + 1));
+    for (int k = -T; k <= T; ++k)
+        grainWin[(size_t) (k + T)] = 0.5f * (1.0f + std::cos (kPi * (float) k / (float) T));
+}
+
 void PsolaShifter::placeGrain (double c)
 {
     // Advance the analysis-mark grid (marks spaced one period apart in input
@@ -69,11 +79,12 @@ void PsolaShifter::placeGrain (double c)
     const int64_t m = (int64_t) std::llround (markGrid);
     const int64_t oc = (int64_t) std::llround (c);
     const int T = std::max (16, (int) std::lround (period));
+    ensureGrainWin (T);
     const float norm = 1.0f / std::max (1.0f, ratio); // Hann OLA at T/ratio spacing sums to ~ratio
 
     for (int k = -T; k <= T; ++k)
     {
-        const float w = 0.5f * (1.0f + std::cos (kPi * (float) k / (float) T));
+        const float w = grainWin[(size_t) (k + T)];
         ola[(size_t) ((oc + k) & kMask)] += norm * w * buf[(size_t) ((m + k) & kMask)];
     }
 }

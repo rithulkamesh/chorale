@@ -105,6 +105,8 @@ public:
             for (auto& v : voices)
                 v.shifter.setLatency (want);
         }
+        updateVoiceGate();
+        leadActive = s.correct != 0;
     }
     void noteOn (int note);
     void noteOff (int note);
@@ -158,6 +160,7 @@ public:
 
 private:
     void runAnalysis();
+    void updateVoiceGate (const bool midiSounding[kNumVoices] = nullptr);
 
     static constexpr int kRingSize = 4096;
     static constexpr int kRingMask = kRingSize - 1;
@@ -204,4 +207,6 @@ private:
     int hopRemaining = kHop;
     bool heldNotes[128] = {};
     float voiceHzOut[kNumVoices] = {}, voiceGainOut[kNumVoices] = {}, lastRms = 0;
+    bool voiceActive[kNumVoices] = {};
+    bool leadActive = true;
 };

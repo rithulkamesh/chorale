@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(Chorale VERSION 1.2.0 LANGUAGES C CXX)
+project(Chorale VERSION 1.2.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -71,6 +71,13 @@ target_include_directories(dsp_tests PRIVATE src)
 # Offline harmonizer CLI for running real vocal WAVs through the engine.
 add_executable(harmonize tools/harmonize.cpp ${DSP_SOURCES})
 target_include_directories(harmonize PRIVATE src)
+
+# Offline CPU benchmark for the DSP path (JUCE-free).
+add_executable(benchmark tools/benchmark.cpp ${DSP_SOURCES})
+target_include_directories(benchmark PRIVATE src)
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU|AppleClang")
+    target_compile_options(benchmark PRIVATE -O3)
+endif()
 
 target_link_libraries(Chorale
     PRIVATE

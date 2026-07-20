@@ -1,14 +1,22 @@
 #include "YinTracker.h"
+#include "Fft.h"
 #include <algorithm>
 #include <cmath>
+
+namespace
+{
+constexpr int kFftSize = 4096; // >= W + (W + tauMax) for linear cross-corr
+static_assert (YinTracker::kFrame / 2 + YinTracker::kFrame / 2 + 735 <= kFftSize,
+               "FFT size too small for YIN frame");
+} // namespace
 
 void YinTracker::prepare (double sampleRate)
 {
     sr = sampleRate;
     tauMin = std::max (2, (int) (sr / 1000.0));           // fmax 1 kHz
     tauMax = std::min (kFrame / 2 - 2, (int) (sr / 60.0)); // fmin 60 Hz
-    d.assign ((size_t) tauMax + 1, 0.0f);
     cmnd.assign ((size_t) tauMax + 1, 1.0f);
+    xr.assign ((size_t) tauMax + 1, 0.0f);
 }
 
 PitchEstimate YinTracker::analyze (const float* x)
@@ -21,22 +29,27 @@ PitchEstimate YinTracker::analyze (const float* x)
     if (std::sqrt (energy / kFrame) < 0.005) // ~ -46 dBFS gate
         return {};
 
-    for (int tau = 1; tau <= tauMax; ++tau)
-    {
-        double sum = 0.0;
-        for (int i = 0; i < W; ++i)
-        {
-            const float diff = x[i] - x[i + tau];
-            sum += diff * diff;
-        }
-        d[(size_t) tau] = (float) sum;
-    }
+    // Difference function: d(tau) = E0 + E1(tau) - 2 * r(tau),
+    // r(tau) = sum_{i=0}^{W-1} x[i]*x[i+tau]  (FFT cross-correlation).
+    fft.crosscorr (x, W, x, W + tauMax, tauMax, xr.data());
 
+    float e0 = 0.0f;
+    for (int i = 0; i < W; ++i)
+        e0 += x[i] * x[i];
+
+    float e1 = 0.0f;
+    for (int j = 1; j < W + 1; ++j)
+        e1 += x[j] * x[j];
+
+    cmnd[0] = 1.0f;
     double running = 0.0;
     for (int tau = 1; tau <= tauMax; ++tau)
     {
-        running += d[(size_t) tau];
-        cmnd[(size_t) tau] = running > 0.0 ? (float) (d[(size_t) tau] * (double) tau / running) : 1.0f;
+        const float d = e0 + e1 - 2.0f * xr[(size_t) tau];
+        running += d;
+        cmnd[(size_t) tau] = running > 0.0 ? (float) (d * (double) tau / running) : 1.0f;
+        if (tau + W < kFrame)
+            e1 += x[tau + W] * x[tau + W] - x[tau] * x[tau];
     }
 
     int best = -1;

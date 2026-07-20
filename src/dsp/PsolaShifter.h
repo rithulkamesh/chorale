@@ -25,12 +25,14 @@ public:
 
 private:
     void placeGrain (double centre);
+    void ensureGrainWin (int T);
 
     static constexpr int kSize = 1 << 15;
     static constexpr int kMask = kSize - 1;
     static constexpr int64_t kOrigin = int64_t (1) << 40; // keeps indices positive for & kMask
 
-    std::vector<float> buf, ola;
+    std::vector<float> buf, ola, grainWin;
+    int grainWinT = 0;
     int latency = kLatency;
     int64_t writeAbs = 0, outAbs = 0;
     double nextGrain = 0, markGrid = 0;
