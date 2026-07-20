@@ -147,6 +147,14 @@ flowchart TB
 CI: [`build.yml`](.github/workflows/build.yml). Tag `v*` to ship zips:
 [`release.yml`](.github/workflows/release.yml).
 
+## Feedback
+
+Feature suggestions and bug reports:
+**[open an issue](https://github.com/rithulkamesh/chorale/issues)**. The
+patchable FX graph is new in 1.2 — if you hit a routing you wish existed
+(feedback loops, more node types, weighted sends), an issue is the fastest
+way to get it on the roadmap.
+
 ## License
 
 [AGPL-3.0](LICENSE). JUCE is AGPLv3 for open source, so we are too.
